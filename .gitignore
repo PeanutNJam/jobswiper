@@ -1,0 +1,40 @@
+# Dependencies
+node_modules/
+vendor/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Frontend
+frontend/dist/
+frontend/build/
+frontend/.expo/
+frontend/.expo-shared/
+
+# Backend
+backend/bin/
+backend/.air/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+go.sum.bak
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Database
+cassandra_data/
+*.db

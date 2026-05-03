@@ -1,0 +1,103 @@
+services:
+  cassandra:
+    image: cassandra:4.1
+    container_name: jobswiper-cassandra
+    ports:
+      - "9042:9042"
+      - "9160:9160"
+    environment:
+      CASSANDRA_CLUSTER_NAME: JobSwiper
+      CASSANDRA_SEEDS: cassandra
+      CASSANDRA_DC: datacenter1
+      CASSANDRA_RACK: rack1
+    volumes:
+      - cassandra_data:/var/lib/cassandra
+    healthcheck:
+      test: ["CMD", "cqlsh", "-e", "describe cluster"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - jobswiper-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: jobswiper-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - jobswiper-network
+
+  minio:
+    image: minio/minio:latest
+    container_name: jobswiper-minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - jobswiper-network
+
+  # Optional: Backend service (uncomment when ready)
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: jobswiper-api
+    ports:
+      - "8000:8080"
+    environment:
+      - CASSANDRA_HOST=cassandra
+      - CASSANDRA_PORT=9042
+      - REDIS_ADDR=redis:6379
+      - JWT_SECRET=your-secret-key-here-change-in-production
+      - AWS_REGION=us-east-1
+      - S3_BUCKET=jobswiper-dev
+      - AWS_ACCESS_KEY_ID=minioadmin
+      - AWS_SECRET_ACCESS_KEY=minioadmin
+      - AWS_ENDPOINT=http://minio:9000
+      - AWS_PUBLIC_ENDPOINT=http://localhost:9000
+    depends_on:
+      cassandra:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - jobswiper-network
+  #   depends_on:
+  #     cassandra:
+  #       condition: service_healthy
+  #   networks:
+  #     - jobswiper-network
+
+volumes:
+  cassandra_data:
+    driver: local
+  redis_data:
+    driver: local
+  minio_data:
+    driver: local
+
+networks:
+  jobswiper-network:
+    driver: bridge

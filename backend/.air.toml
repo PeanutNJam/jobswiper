@@ -1,0 +1,4 @@
+root:
+  watch_dir: "cmd,internal,pkg"
+  cmd: "go run cmd/main.go"
+  ext: "go"
