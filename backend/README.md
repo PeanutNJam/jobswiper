@@ -60,12 +60,12 @@ JWT_SECRET=your-secret-key-here
 docker-compose up -d cassandra
 ```
 
-5. Run the server:
+5. Run the load-balanced backend stack:
 ```bash
-go run cmd/main.go
+docker compose up -d --build --scale backend=3
 ```
 
-Server will start on `http://localhost:8080`
+The API is available through Nginx at `http://localhost:8000`.
 
 ## API Endpoints
 
@@ -109,8 +109,7 @@ Migrations are managed in `internal/db/cassandra.go` and run automatically on st
 
 ### Docker
 ```bash
-docker build -t jobswiper-api .
-docker run -p 8080:8080 --env-file .env jobswiper-api
+docker compose up -d --build --scale backend=3
 ```
 
 ### Cloud Deployment

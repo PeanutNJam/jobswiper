@@ -28,7 +28,7 @@ type Props = {
   onDelete: () => Promise<void>;
 };
 
-const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:8080';
+const API_BASE = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:8000';
 const WS_BASE  = API_BASE.replace(/^https/, 'wss').replace(/^http/, 'ws');
 
 function formatTime(ms: number) {

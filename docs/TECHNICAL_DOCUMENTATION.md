@@ -28,7 +28,11 @@ JobSwiper follows a three-tier architecture with clear separation of concerns:
                        │ HTTPS/REST + WebSocket
                        │
 ┌──────────────────────▼──────────────────────────────────┐
-│  Backend API (Go + Gin)                                │
+│  Load Balancer (Nginx)                                 │
+└──────────────────────┬──────────────────────────────────┘
+                       │
+┌──────────────────────▼──────────────────────────────────┐
+│  Backend API Replicas (Go + Gin)                       │
 │  - RESTful endpoints                                    │
 │  - JWT authentication                                   │
 │  - WebSocket server                                     │
@@ -39,9 +43,9 @@ JobSwiper follows a three-tier architecture with clear separation of concerns:
                        │
 ┌──────────────────────▼──────────────────────────────────┐
 │  Data Layer                                             │
-│  - Apache Cassandra (primary database)                  │
-│  - Redis (caching & real-time features)                 │
-│  - MinIO (object storage)                               │
+│  - Apache Cassandra (primary database + read models)    │
+│  - Redis (swipe coordination + chat Pub/Sub)            │
+│  - MinIO/S3-compatible object storage                   │
 └──────────────────────────────────────────────────────────┘
 ```
 
@@ -58,14 +62,14 @@ JobSwiper follows a three-tier architecture with clear separation of concerns:
 - Business logic implementation
 - Authentication and authorization
 - Data validation and processing
-- Real-time communication (WebSocket)
+- Real-time communication through WebSocket rooms and Redis Pub/Sub fanout
 - Integration with external services
 
 #### Data Layer
 - Persistent data storage
-- Caching for performance
+- Cross-replica coordination through Redis
 - File storage for images
-- Real-time data structures
+- Real-time chat broadcast transport
 
 ## Frontend Tech Stack
 
@@ -175,7 +179,8 @@ backend/
 
 #### Real-time Features (`pkg/hub`)
 - WebSocket connection management
-- Message broadcasting
+- Local message broadcasting to clients connected to the same backend replica
+- Redis Pub/Sub broadcasting so messages reach clients connected to other replicas
 - Client registration/deregistration
 
 ## Database
@@ -187,8 +192,10 @@ backend/
 - **Data Model**: Designed for high write throughput and horizontal scalability
 
 #### Schema Overview
+Cassandra is modeled around query-specific tables instead of relational joins. The backend writes to canonical tables plus denormalized read models so common reads avoid `ALLOW FILTERING` and secondary-index lookups.
+
 ```sql
--- Users table
+-- Canonical users table: lookup by user id / JWT subject
 CREATE TABLE users (
     id UUID PRIMARY KEY,
     email TEXT,
@@ -199,17 +206,41 @@ CREATE TABLE users (
     updated_at TIMESTAMP
 );
 
--- Profiles table
+-- Login read model: lookup by normalized email
+CREATE TABLE users_by_email (
+    email TEXT PRIMARY KEY,
+    id UUID,
+    username TEXT,
+    password_hash TEXT,
+    user_type TEXT,
+    created_at TIMESTAMP,
+    updated_at TIMESTAMP
+);
+
+-- Discovery read model: page users by role
+CREATE TABLE users_by_type (
+    user_type TEXT,
+    created_at TIMESTAMP,
+    id UUID,
+    email TEXT,
+    username TEXT,
+    updated_at TIMESTAMP,
+    PRIMARY KEY ((user_type), created_at, id)
+) WITH CLUSTERING ORDER BY (created_at DESC, id ASC);
+
+-- One profile per user
 CREATE TABLE profiles (
     user_id UUID PRIMARY KEY,
     name TEXT,
     description TEXT,
     photo_url TEXT,
     location TEXT,
+    device_token TEXT,
+    skills LIST<TEXT>,
     updated_at TIMESTAMP
 );
 
--- Swipes table (partitioned by user_id)
+-- Swipes made by a user
 CREATE TABLE swipes (
     user_id UUID,
     target_id UUID,
@@ -219,7 +250,17 @@ CREATE TABLE swipes (
     PRIMARY KEY (user_id, target_id)
 );
 
--- Matches table
+-- Candidate read model: users who swiped on a target
+CREATE TABLE swipes_by_target (
+    target_id UUID,
+    user_id UUID,
+    id UUID,
+    direction TEXT,
+    created_at TIMESTAMP,
+    PRIMARY KEY ((target_id), user_id)
+);
+
+-- Canonical match lookup by id
 CREATE TABLE matches (
     id UUID PRIMARY KEY,
     user_id_1 UUID,
@@ -227,23 +268,70 @@ CREATE TABLE matches (
     created_at TIMESTAMP
 );
 
--- Messages table (partitioned by match_id)
-CREATE TABLE messages (
-    match_id UUID,
+-- Inbox read model: matches visible to one user
+CREATE TABLE matches_by_user (
+    user_id UUID,
     created_at TIMESTAMP,
-    sender_id UUID,
+    id UUID,
+    user_id_1 UUID,
+    user_id_2 UUID,
+    PRIMARY KEY ((user_id), created_at, id)
+) WITH CLUSTERING ORDER BY (created_at DESC, id ASC);
+
+-- Chat history for one match
+CREATE TABLE messages (
+    match_id TEXT,
+    created_at TIMESTAMP,
+    id TEXT,
+    sender_id TEXT,
     content TEXT,
-    PRIMARY KEY (match_id, created_at)
-) WITH CLUSTERING ORDER BY (created_at DESC);
+    PRIMARY KEY ((match_id), created_at, id)
+) WITH CLUSTERING ORDER BY (created_at ASC, id ASC);
+
+-- Inbox preview read model
+CREATE TABLE latest_messages_by_match (
+    match_id TEXT PRIMARY KEY,
+    created_at TIMESTAMP,
+    id TEXT,
+    sender_id TEXT,
+    content TEXT
+);
 ```
 
-### Caching: Redis 7-alpine
-- **Purpose**: Session management, real-time features, caching
+#### Query Patterns
+- **Login**: `users_by_email` by normalized email.
+- **Session restore**: `users` by JWT user id through `GET /api/me`.
+- **Discovery**: `users_by_type`, then profiles by `user_id`.
+- **Swipe history**: `swipes` partitioned by `user_id`.
+- **Employer candidates**: `swipes_by_target` partitioned by target user id.
+- **Matches inbox**: `matches_by_user` partitioned by current user id.
+- **Chat history**: `messages` partitioned by match id.
+- **Latest message preview**: `latest_messages_by_match`.
+
+In development, the backend performs a startup backfill for the read-model tables so existing seed data remains usable. In production, that same operation should be handled as an explicit migration/backfill job.
+
+### Coordination: Redis 7-alpine
+- **Purpose**: Atomic mutual-swipe coordination and cross-replica WebSocket fanout
 - **Persistence**: AOF (Append Only File) enabled
 - **Use Cases**:
-  - Matching queue management
-  - Real-time data structures
-  - Session storage
+  - Store short-lived right-swipe pair sets
+  - Ensure exactly one concurrent right-swipe request creates a match
+  - Expire unmatched right-swipe pair keys after 30 days
+  - Publish chat messages between backend replicas through Redis Pub/Sub
+
+Redis key shape:
+```text
+swipe:right:{smaller_user_id}:{larger_user_id}
+```
+
+The backend uses a Lua script to atomically run `SADD`, `EXPIRE`, and `SCARD`. When the set count reaches two, the request that completed the pair writes the persistent match rows to Cassandra.
+
+Chat Pub/Sub channel:
+```text
+jobswiper:chat:broadcast
+```
+
+When a message is sent, the backend writes it to Cassandra, delivers it to local WebSocket clients, and publishes a Redis event. Other backend replicas consume that event and deliver the same message to their local WebSocket clients.
 
 ### Object Storage: MinIO
 - **Purpose**: File storage for profile images
@@ -258,7 +346,8 @@ CREATE TABLE messages (
   - Cassandra (port 9042)
   - Redis (port 6379)
   - MinIO (ports 9000, 9001)
-  - Backend (port 8080, optional containerized)
+  - Nginx load balancer (host port 8000 mapped to container port 80)
+  - Backend replicas (port 8080 inside the Docker network)
 
 ### Production Deployment
 - **Containerization**: Docker for all services
@@ -271,7 +360,8 @@ CREATE TABLE messages (
 - **Internal Network**: `jobswiper-network` for service communication
 - **Port Mapping**:
   - Frontend: N/A (Expo development server)
-  - Backend: 8080
+  - Load balancer: 8000 on the host
+  - Backend replicas: 8080 inside the Docker network
   - Cassandra: 9042 (CQL), 9160 (Thrift)
   - Redis: 6379
   - MinIO: 9000 (API), 9001 (Console)
@@ -282,7 +372,7 @@ CREATE TABLE messages (
 - **Base URL**: `/api`
 - **Authentication**: Bearer token in Authorization header
 - **Content Type**: `application/json`
-- **Response Format**: JSON with consistent structure
+- **Response Format**: JSON shaped per endpoint
 
 ### Key Endpoints
 
@@ -302,24 +392,24 @@ POST /api/swipe                 # Create a swipe
 GET  /api/candidates            # Get potential matches
 GET  /api/discover              # Discover new profiles
 GET  /api/matches               # Get user's matches
-DELETE /api/matches/:id         # Delete a match
-GET  /api/matches/:id/messages  # Get match messages
-POST /api/matches/:id/messages  # Send a message
+DELETE /api/matches/:matchId         # Delete a match
+GET  /api/matches/:matchId/messages  # Get match messages
+POST /api/matches/:matchId/messages  # Send a message
 GET  /api/upload-url            # Get S3 upload URL
 PUT  /api/device-token          # Save device token for notifications
 ```
 
 ### WebSocket API
-- **Endpoint**: `/api/matches/:id/ws`
+- **Endpoint**: `/api/matches/:matchId/ws`
 - **Purpose**: Real-time messaging within matches
 - **Protocol**: JSON messages over WebSocket
 
 ### API Response Format
+Responses are JSON. Successful responses are shaped per endpoint, for example `{ "token": "...", "user": {...} }`, `{ "matches": [...] }`, or `{ "ok": true }`. Error responses generally use:
+
 ```json
 {
-  "status": "success|error",
-  "data": {},
-  "error": null
+  "error": "message"
 }
 ```
 
@@ -345,18 +435,19 @@ PUT  /api/device-token          # Save device token for notifications
 - **Network Isolation**: Internal Docker networks
 - **Secret Management**: Environment variables for sensitive data
 - **HTTPS**: TLS termination at load balancer
-- **Rate Limiting**: Implemented in middleware (planned)
+- **Rate Limiting**: Planned for public production deployment
 
 ## Performance Considerations
 
 ### Database Optimization
-- **Cassandra Partitioning**: Optimized for swipe and match queries
-- **Indexing**: Secondary indexes on frequently queried fields
-- **Clustering**: Time-based clustering for messages and notifications
+- **Cassandra Partitioning**: Optimized for swipe, discovery, match inbox, and chat queries
+- **Denormalized Read Models**: Query-specific tables for email login, discovery, candidate lists, match inboxes, and latest message previews
+- **No Filtering Reads**: Hot paths avoid `ALLOW FILTERING` and secondary-index reads
+- **Clustering**: Time-based clustering for match inboxes, messages, and notifications
 
 ### Caching Strategy
-- **Redis**: Used for real-time features and session management
-- **In-memory Caching**: Application-level caching for frequently accessed data
+- **Redis**: Used as a coordination layer for mutual right swipes and as Pub/Sub for cross-replica WebSocket broadcasts, not as the durable source of truth
+- **Cassandra**: Stores durable users, profiles, swipes, matches, and messages
 
 ### Mobile Performance
 - **Lazy Loading**: Components and data loaded on demand
@@ -386,9 +477,8 @@ cd job_swiper
 # Start infrastructure
 sh setup.sh
 
-# Start backend
-cd backend
-go run cmd/main.go
+# Start load-balanced backend replicas
+docker compose up -d --build --scale backend=3
 
 # Start frontend (new terminal)
 cd frontend

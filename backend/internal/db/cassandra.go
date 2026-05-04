@@ -48,6 +48,11 @@ func NewCassandraDB(cfg *config.Config) (*CassandraDB, error) {
 	if err := initializeTables(session); err != nil {
 		return nil, fmt.Errorf("failed to initialize tables: %w", err)
 	}
+	if cfg.Environment != "production" {
+		if err := backfillReadModels(session); err != nil {
+			return nil, fmt.Errorf("failed to backfill read models: %w", err)
+		}
+	}
 
 	return &CassandraDB{session: session}, nil
 }
@@ -63,6 +68,24 @@ func initializeTables(session *gocql.Session) error {
 			created_at TIMESTAMP,
 			updated_at TIMESTAMP
 		)`,
+		`CREATE TABLE IF NOT EXISTS users_by_email (
+			email TEXT PRIMARY KEY,
+			id UUID,
+			username TEXT,
+			password_hash TEXT,
+			user_type TEXT,
+			created_at TIMESTAMP,
+			updated_at TIMESTAMP
+		)`,
+		`CREATE TABLE IF NOT EXISTS users_by_type (
+			user_type TEXT,
+			created_at TIMESTAMP,
+			id UUID,
+			email TEXT,
+			username TEXT,
+			updated_at TIMESTAMP,
+			PRIMARY KEY ((user_type), created_at, id)
+		) WITH CLUSTERING ORDER BY (created_at DESC, id ASC)`,
 		`CREATE TABLE IF NOT EXISTS profiles (
 			user_id UUID PRIMARY KEY,
 			name TEXT,
@@ -91,13 +114,29 @@ func initializeTables(session *gocql.Session) error {
 			created_at TIMESTAMP,
 			PRIMARY KEY (user_id, target_id)
 		)`,
+		`CREATE TABLE IF NOT EXISTS swipes_by_target (
+			target_id UUID,
+			user_id UUID,
+			id UUID,
+			direction TEXT,
+			created_at TIMESTAMP,
+			PRIMARY KEY ((target_id), user_id)
+		)`,
 		`CREATE TABLE IF NOT EXISTS matches (
 			id UUID PRIMARY KEY,
 			user_id_1 UUID,
 			user_id_2 UUID,
 			created_at TIMESTAMP
 		)`,
-		`CREATE TABLE IF NOT EXISTS jobswiper.messages (
+		`CREATE TABLE IF NOT EXISTS matches_by_user (
+			user_id UUID,
+			created_at TIMESTAMP,
+			id UUID,
+			user_id_1 UUID,
+			user_id_2 UUID,
+			PRIMARY KEY ((user_id), created_at, id)
+		) WITH CLUSTERING ORDER BY (created_at DESC, id ASC)`,
+		`CREATE TABLE IF NOT EXISTS messages (
     match_id   TEXT,
     created_at TIMESTAMP,
     id         TEXT,
@@ -105,11 +144,13 @@ func initializeTables(session *gocql.Session) error {
     content    TEXT,
     PRIMARY KEY ((match_id), created_at, id)
 ) WITH CLUSTERING ORDER BY (created_at ASC, id ASC)`,
-		`CREATE INDEX IF NOT EXISTS idx_users_email ON users (email)`,
-		`CREATE INDEX IF NOT EXISTS idx_users_type  ON users (user_type)`,
-		`CREATE INDEX IF NOT EXISTS idx_matches_user1 ON matches (user_id_1)`,
-		`CREATE INDEX IF NOT EXISTS idx_matches_user2 ON matches (user_id_2)`,
-		`CREATE INDEX IF NOT EXISTS idx_swipes_target ON jobswiper.swipes (target_id)`,
+		`CREATE TABLE IF NOT EXISTS latest_messages_by_match (
+			match_id TEXT PRIMARY KEY,
+			created_at TIMESTAMP,
+			id TEXT,
+			sender_id TEXT,
+			content TEXT
+		)`,
 	}
 
 	for _, stmt := range statements {
@@ -126,6 +167,113 @@ func initializeTables(session *gocql.Session) error {
 	return nil
 }
 
+func backfillReadModels(session *gocql.Session) error {
+	if err := backfillUsers(session); err != nil {
+		return err
+	}
+	if err := backfillSwipes(session); err != nil {
+		return err
+	}
+	if err := backfillMatches(session); err != nil {
+		return err
+	}
+	return backfillLatestMessages(session)
+}
+
+func backfillUsers(session *gocql.Session) error {
+	iter := session.Query(`SELECT id, email, username, password_hash, user_type, created_at, updated_at FROM users`).Iter()
+	var id, email, username, passwordHash, userType string
+	var createdAt, updatedAt time.Time
+	for iter.Scan(&id, &email, &username, &passwordHash, &userType, &createdAt, &updatedAt) {
+		batch := session.NewBatch(gocql.UnloggedBatch)
+		batch.Query(`
+			INSERT INTO users_by_email (email, id, username, password_hash, user_type, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			email, id, username, passwordHash, userType, createdAt, updatedAt,
+		)
+		batch.Query(`
+			INSERT INTO users_by_type (user_type, created_at, id, email, username, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?)`,
+			userType, createdAt, id, email, username, updatedAt,
+		)
+		if err := session.ExecuteBatch(batch); err != nil {
+			_ = iter.Close()
+			return err
+		}
+	}
+	return iter.Close()
+}
+
+func backfillSwipes(session *gocql.Session) error {
+	iter := session.Query(`SELECT user_id, target_id, id, direction, created_at FROM swipes`).Iter()
+	var userID, targetID, id, direction string
+	var createdAt time.Time
+	for iter.Scan(&userID, &targetID, &id, &direction, &createdAt) {
+		if err := session.Query(`
+			INSERT INTO swipes_by_target (target_id, user_id, id, direction, created_at)
+			VALUES (?, ?, ?, ?, ?)`,
+			targetID, userID, id, direction, createdAt,
+		).Exec(); err != nil {
+			_ = iter.Close()
+			return err
+		}
+	}
+	return iter.Close()
+}
+
+func backfillMatches(session *gocql.Session) error {
+	iter := session.Query(`SELECT id, user_id_1, user_id_2, created_at FROM matches`).Iter()
+	var id, userID1, userID2 string
+	var createdAt time.Time
+	for iter.Scan(&id, &userID1, &userID2, &createdAt) {
+		batch := session.NewBatch(gocql.UnloggedBatch)
+		batch.Query(`
+			INSERT INTO matches_by_user (user_id, created_at, id, user_id_1, user_id_2)
+			VALUES (?, ?, ?, ?, ?)`,
+			userID1, createdAt, id, userID1, userID2,
+		)
+		batch.Query(`
+			INSERT INTO matches_by_user (user_id, created_at, id, user_id_1, user_id_2)
+			VALUES (?, ?, ?, ?, ?)`,
+			userID2, createdAt, id, userID1, userID2,
+		)
+		if err := session.ExecuteBatch(batch); err != nil {
+			_ = iter.Close()
+			return err
+		}
+	}
+	return iter.Close()
+}
+
+func backfillLatestMessages(session *gocql.Session) error {
+	iter := session.Query(`SELECT id, match_id, sender_id, content, created_at FROM messages`).Iter()
+	latest := map[string]models.Message{}
+	var id, matchID, senderID, content string
+	var createdAt time.Time
+	for iter.Scan(&id, &matchID, &senderID, &content, &createdAt) {
+		current, ok := latest[matchID]
+		if !ok || createdAt.UnixMilli() > current.CreatedAt {
+			latest[matchID] = models.Message{
+				ID: id, MatchID: matchID, SenderID: senderID,
+				Content: content, CreatedAt: createdAt.UnixMilli(),
+			}
+		}
+	}
+	if err := iter.Close(); err != nil {
+		return err
+	}
+	for _, msg := range latest {
+		if err := session.Query(`
+			INSERT INTO latest_messages_by_match (match_id, created_at, id, sender_id, content)
+			VALUES (?, ?, ?, ?, ?)`,
+			msg.MatchID, time.UnixMilli(msg.CreatedAt), msg.ID, msg.SenderID, msg.Content,
+		).Exec(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (cdb *CassandraDB) Close() error {
 	cdb.session.Close()
 	return nil
@@ -138,12 +286,26 @@ func (cdb *CassandraDB) GetSession() *gocql.Session {
 // ── Users ──────────────────────────────────────────────────────────────────
 
 func (cdb *CassandraDB) CreateUser(user *models.User, passwordHash string) error {
-	return cdb.session.Query(`
+	batch := cdb.session.NewBatch(gocql.LoggedBatch)
+	batch.Query(`
 		INSERT INTO users (id, email, username, password_hash, user_type, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		user.ID, user.Email, user.Username, passwordHash, user.UserType,
 		time.UnixMilli(user.CreatedAt), time.UnixMilli(user.UpdatedAt),
-	).Exec()
+	)
+	batch.Query(`
+		INSERT INTO users_by_email (email, id, username, password_hash, user_type, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		user.Email, user.ID, user.Username, passwordHash, user.UserType,
+		time.UnixMilli(user.CreatedAt), time.UnixMilli(user.UpdatedAt),
+	)
+	batch.Query(`
+		INSERT INTO users_by_type (user_type, created_at, id, email, username, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?)`,
+		user.UserType, time.UnixMilli(user.CreatedAt), user.ID, user.Email,
+		user.Username, time.UnixMilli(user.UpdatedAt),
+	)
+	return cdb.session.ExecuteBatch(batch)
 }
 
 func (cdb *CassandraDB) GetUserByEmail(email string) (*models.User, string, error) {
@@ -153,7 +315,7 @@ func (cdb *CassandraDB) GetUserByEmail(email string) (*models.User, string, erro
 
 	err := cdb.session.Query(`
 		SELECT id, email, username, password_hash, user_type, created_at, updated_at
-		FROM users WHERE email = ? LIMIT 1`,
+		FROM users_by_email WHERE email = ?`,
 		email,
 	).Scan(
 		&user.ID, &user.Email, &user.Username, &passwordHash,
@@ -221,12 +383,20 @@ func (cdb *CassandraDB) UpdateProfile(profile *models.Profile) error {
 // ── Swipes ─────────────────────────────────────────────────────────────────
 
 func (cdb *CassandraDB) CreateSwipe(swipe *models.Swipe) error {
-	return cdb.session.Query(`
+	batch := cdb.session.NewBatch(gocql.LoggedBatch)
+	batch.Query(`
 		INSERT INTO swipes (user_id, target_id, id, direction, created_at)
 		VALUES (?, ?, ?, ?, ?)`,
 		swipe.UserID, swipe.TargetID, swipe.ID,
 		swipe.Direction, time.UnixMilli(swipe.CreatedAt),
-	).Exec()
+	)
+	batch.Query(`
+		INSERT INTO swipes_by_target (target_id, user_id, id, direction, created_at)
+		VALUES (?, ?, ?, ?, ?)`,
+		swipe.TargetID, swipe.UserID, swipe.ID,
+		swipe.Direction, time.UnixMilli(swipe.CreatedAt),
+	)
+	return cdb.session.ExecuteBatch(batch)
 }
 
 func (cdb *CassandraDB) GetSwipesByUserID(userID string) ([]models.Swipe, error) {
@@ -269,7 +439,7 @@ func (cdb *CassandraDB) GetSwipe(userID, targetID string) (*models.Swipe, error)
 // GetRightSwipesByTarget returns all user_ids that swiped right on targetID.
 func (db *CassandraDB) GetRightSwipesByTarget(targetID string) ([]string, error) {
 	iter := db.session.Query(
-		`SELECT user_id, direction FROM swipes WHERE target_id = ? ALLOW FILTERING`,
+		`SELECT user_id, direction FROM swipes_by_target WHERE target_id = ?`,
 		targetID,
 	).Iter()
 
@@ -286,35 +456,35 @@ func (db *CassandraDB) GetRightSwipesByTarget(targetID string) ([]string, error)
 // ── Matches ────────────────────────────────────────────────────────────────
 
 func (cdb *CassandraDB) CreateMatch(match *models.Match) error {
-	return cdb.session.Query(`
+	batch := cdb.session.NewBatch(gocql.LoggedBatch)
+	batch.Query(`
 		INSERT INTO matches (id, user_id_1, user_id_2, created_at)
 		VALUES (?, ?, ?, ?)`,
 		match.ID, match.UserID1, match.UserID2,
 		time.UnixMilli(match.CreatedAt),
-	).Exec()
+	)
+	batch.Query(`
+		INSERT INTO matches_by_user (user_id, created_at, id, user_id_1, user_id_2)
+		VALUES (?, ?, ?, ?, ?)`,
+		match.UserID1, time.UnixMilli(match.CreatedAt), match.ID, match.UserID1, match.UserID2,
+	)
+	batch.Query(`
+		INSERT INTO matches_by_user (user_id, created_at, id, user_id_1, user_id_2)
+		VALUES (?, ?, ?, ?, ?)`,
+		match.UserID2, time.UnixMilli(match.CreatedAt), match.ID, match.UserID1, match.UserID2,
+	)
+	return cdb.session.ExecuteBatch(batch)
 }
 
 func (db *CassandraDB) GetMatchesByUserID(userID string) ([]models.Match, error) {
 	var matches []models.Match
-	// query user_id_1
-	iter := db.session.Query(`SELECT id, user_id_1, user_id_2, created_at FROM matches WHERE user_id_1 = ?`, userID).Iter()
+	iter := db.session.Query(`SELECT id, user_id_1, user_id_2, created_at FROM matches_by_user WHERE user_id = ?`, userID).Iter()
 	var id, uid1, uid2 string
 	var t time.Time
 	for iter.Scan(&id, &uid1, &uid2, &t) {
 		matches = append(matches, models.Match{ID: id, UserID1: uid1, UserID2: uid2, CreatedAt: t.UnixMilli()})
 	}
-	if err := iter.Close(); err != nil {
-		return nil, err
-	}
-	// query user_id_2
-	iter2 := db.session.Query(`SELECT id, user_id_1, user_id_2, created_at FROM matches WHERE user_id_2 = ?`, userID).Iter()
-	for iter2.Scan(&id, &uid1, &uid2, &t) {
-		matches = append(matches, models.Match{ID: id, UserID1: uid1, UserID2: uid2, CreatedAt: t.UnixMilli()})
-	}
-	if err := iter2.Close(); err != nil {
-		return nil, err
-	}
-	return matches, nil
+	return matches, iter.Close()
 }
 
 func (db *CassandraDB) GetMatchByID(matchID string) (*models.Match, error) {
@@ -332,12 +502,27 @@ func (db *CassandraDB) DeleteMatchByID(matchID string) error {
 	return db.session.Query(`DELETE FROM matches WHERE id = ?`, matchID).Exec()
 }
 
+func (db *CassandraDB) DeleteMatch(match *models.Match) error {
+	t := time.UnixMilli(match.CreatedAt)
+	batch := db.session.NewBatch(gocql.LoggedBatch)
+	batch.Query(`DELETE FROM matches WHERE id = ?`, match.ID)
+	batch.Query(`DELETE FROM matches_by_user WHERE user_id = ? AND created_at = ? AND id = ?`, match.UserID1, t, match.ID)
+	batch.Query(`DELETE FROM matches_by_user WHERE user_id = ? AND created_at = ? AND id = ?`, match.UserID2, t, match.ID)
+	return db.session.ExecuteBatch(batch)
+}
+
 func (db *CassandraDB) CreateMessage(msg *models.Message) error {
 	t := time.UnixMilli(msg.CreatedAt)
-	return db.session.Query(
+	batch := db.session.NewBatch(gocql.LoggedBatch)
+	batch.Query(
 		`INSERT INTO messages (match_id, created_at, id, sender_id, content) VALUES (?, ?, ?, ?, ?)`,
 		msg.MatchID, t, msg.ID, msg.SenderID, msg.Content,
-	).Exec()
+	)
+	batch.Query(
+		`INSERT INTO latest_messages_by_match (match_id, created_at, id, sender_id, content) VALUES (?, ?, ?, ?, ?)`,
+		msg.MatchID, t, msg.ID, msg.SenderID, msg.Content,
+	)
+	return db.session.ExecuteBatch(batch)
 }
 
 func (db *CassandraDB) GetMessagesByMatchID(matchID string) ([]models.Message, error) {
@@ -355,7 +540,24 @@ func (db *CassandraDB) GetMessagesByMatchID(matchID string) ([]models.Message, e
 }
 
 func (db *CassandraDB) DeleteMessagesByMatchID(matchID string) error {
-	return db.session.Query(`DELETE FROM messages WHERE match_id = ?`, matchID).Exec()
+	batch := db.session.NewBatch(gocql.LoggedBatch)
+	batch.Query(`DELETE FROM messages WHERE match_id = ?`, matchID)
+	batch.Query(`DELETE FROM latest_messages_by_match WHERE match_id = ?`, matchID)
+	return db.session.ExecuteBatch(batch)
+}
+
+func (db *CassandraDB) GetLatestMessageByMatchID(matchID string) (*models.Message, error) {
+	var msg models.Message
+	var t time.Time
+	err := db.session.Query(
+		`SELECT id, match_id, sender_id, content, created_at FROM latest_messages_by_match WHERE match_id = ?`,
+		matchID,
+	).Scan(&msg.ID, &msg.MatchID, &msg.SenderID, &msg.Content, &t)
+	if err != nil {
+		return nil, err
+	}
+	msg.CreatedAt = t.UnixMilli()
+	return &msg, nil
 }
 
 // ── Discover ───────────────────────────────────────────────────────────────
@@ -377,7 +579,7 @@ func (db *CassandraDB) GetUserByID(userID string) (*models.User, error) {
 
 func (db *CassandraDB) GetUsersByType(userType string) ([]models.User, error) {
 	iter := db.session.Query(
-		`SELECT id, email, username, user_type, created_at, updated_at FROM users WHERE user_type = ?`,
+		`SELECT id, email, username, user_type, created_at, updated_at FROM users_by_type WHERE user_type = ? LIMIT 100`,
 		userType,
 	).Iter()
 	var users []models.User

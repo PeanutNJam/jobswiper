@@ -43,16 +43,15 @@ go mod download
 # Create .env file
 cp .env.example .env
 
-# Start the backend server
-go run cmd/main.go
+# Start the load-balanced backend stack
+docker compose up -d --build --scale backend=3
 
-# The server will start on http://localhost:8080
-# You should see "Listening on :8080"
+# The API is available through Nginx at http://localhost:8000
 ```
 
 In a new terminal window, verify the backend is running:
 ```bash
-curl http://localhost:8080/health
+curl http://localhost:8000/health
 ```
 
 Expected response:
@@ -79,7 +78,7 @@ npm start
 
 - [ ] Docker Desktop is running
 - [ ] `docker-compose logs cassandra` shows Cassandra is healthy
-- [ ] `curl http://localhost:8080/health` returns status ok
+- [ ] `curl http://localhost:8000/health` returns status ok
 - [ ] Frontend starts without errors
 - [ ] Can see Expo app running in simulator
 
@@ -140,7 +139,7 @@ docker-compose up cassandra
 ### Terminal 2: Backend
 ```bash
 cd backend
-go run cmd/main.go
+docker compose up -d --build --scale backend=3
 ```
 
 ### Terminal 3: Frontend

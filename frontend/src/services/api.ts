@@ -2,7 +2,7 @@ import axios, { AxiosInstance, AxiosResponse, InternalAxiosRequestConfig } from 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { AuthResponse, Profile, Candidate, UploadUrlResponse, MatchDetail, Message, DiscoverUser, User } from '../types';
 
-const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:8080';
+const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:8000';
 const AUTH_USER_KEY = 'authUser';
 
 // Convert all snake_case keys in API responses to camelCase

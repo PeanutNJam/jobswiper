@@ -2,140 +2,147 @@
 
 ## System Overview
 
-JobSwiper is a three-tier job matching application with a mobile-first approach.
+JobSwiper is a three-tier mobile job matching application. Job seekers and employers discover each other through swipe flows, create mutual matches, and continue through in-app conversations.
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  Frontend (Expo/React Native - iOS/Android)            │
-│  - Swipe interface                                      │
-│  - User authentication                                  │
-│  - Profile management                                   │
+│ Frontend: Expo / React Native / TypeScript              │
+│ - Auth, persisted sessions, profile management          │
+│ - Swipe UI for jobs/candidates                          │
+│ - Match inbox and chat screens                          │
 └──────────────────────┬──────────────────────────────────┘
-                       │ HTTPS
+                       │ REST + WebSocket
                        │
 ┌──────────────────────▼──────────────────────────────────┐
-│  Backend API (Go + Gin)                                │
-│  - RESTful endpoints                                    │
-│  - User/Profile management                             │
-│  - Matching algorithm                                   │
-│  - WebSocket for real-time updates                     │
+│ Load Balancer: Nginx                                    │
 └──────────────────────┬──────────────────────────────────┘
-                       │ TCP Port 9042
                        │
 ┌──────────────────────▼──────────────────────────────────┐
-│  Database (Apache Cassandra)                           │
-│  - Distributed, highly available                        │
-│  - Time-series optimized                               │
-│  - Horizontally scalable                               │
+│ Backend API Replicas: Go + Gin                          │
+│ - JWT auth middleware                                   │
+│ - REST endpoints for auth/profile/swipes/matches/chat   │
+│ - WebSocket hub for live chat delivery                  │
+│ - Push notifications for new matches                    │
+└───────────────┬──────────────┬───────────────────────────┘
+                │              │
+                │              └── Redis: swipe coordination + chat Pub/Sub
+                │
+┌───────────────▼──────────────────────────────────────────┐
+│ Cassandra                                                │
+│ - Durable users, profiles, swipes, matches, messages     │
+│ - Query-specific read models for production-style access │
 └──────────────────────────────────────────────────────────┘
 ```
 
-## Component Details
+## Components
 
-### Frontend - Expo/React Native
+### Frontend
 - **Location**: `/frontend`
 - **Language**: TypeScript
-- **Build Target**: iOS (with Android support)
-- **State Management**: Zustand for local state
-- **Key Features**:
-  - Swipe-based matching interface
-  - OAuth integration (Apple Sign In, Google)
-  - Image upload for profiles
-  - Real-time match notifications
+- **Framework**: Expo / React Native
+- **State**: Zustand plus AsyncStorage for persisted auth state
+- **API Client**: Axios with a request interceptor that attaches `Authorization: Bearer <jwt>`
 
-### Backend - Go API
+### Backend
 - **Location**: `/backend`
-- **Framework**: Gin (lightweight HTTP framework)
+- **Framework**: Gin
 - **Database Driver**: GoCQL for Cassandra
-- **Key Features**:
-  - User authentication with JWT
-  - RESTful API for all operations
-  - Matching algorithm (to be implemented)
-  - WebSocket support for real-time features
-  - Rate limiting and request validation
+- **Auth**: JWT signed with HMAC-SHA256
+- **Realtime**: Gorilla WebSocket, in-process room fanout, and Redis Pub/Sub for cross-replica broadcasts
+- **Storage**: S3-compatible upload URLs through MinIO locally
+- **Push**: Expo push messages for match notifications
 
-### Database - Apache Cassandra
-- **Location**: `/database`
-- **Replication**: Single-node for dev, multi-node for production
-- **Keyspace**: `jobswiper`
-- **Key Features**:
-  - High availability
-  - Linear scalability
-  - Suitable for time-series data
-  - No single point of failure
+### Data Layer
+- **Cassandra** is the source of truth.
+- **Redis** is used as a coordination layer for right-swipe match detection and as the Pub/Sub bus that lets chat messages reach WebSocket clients connected to different backend replicas.
+- **MinIO/S3** stores profile images.
+
+## Cassandra Data Model
+
+The backend uses Cassandra read models shaped around application queries:
+
+- `users`: canonical user lookup by id.
+- `users_by_email`: login lookup by normalized email.
+- `users_by_type`: discovery feed by `job_seeker` or `employer`.
+- `profiles`: one profile per user id.
+- `jobs`: job postings by id.
+- `swipes`: swipes made by a user, keyed by `(user_id, target_id)`.
+- `swipes_by_target`: candidate list for an employer/target.
+- `matches`: canonical match lookup by match id.
+- `matches_by_user`: match inbox for each participant.
+- `messages`: chat history partitioned by match id.
+- `latest_messages_by_match`: conversation preview without reading full chat history.
+
+Hot-path reads avoid `ALLOW FILTERING` and secondary-index lookups. Writes fan out into the canonical table plus the relevant read-model tables.
 
 ## API Design
-
-### RESTful Endpoints
 
 ```
 Authentication
 ├── POST /api/auth/register
-├── POST /api/auth/login
-└── POST /api/auth/refresh
+└── POST /api/auth/login
 
-Profiles
+Current User
+├── GET  /api/me
 ├── GET  /api/profile
-├── PUT  /api/profile
-└── GET  /api/users/:id
+└── PUT  /api/profile
 
-Matches
-├── GET  /api/matches
-├── GET  /api/matches/:id
-└── POST /api/matches/:id/message
-
-Swipes
+Discovery and Swipes
+├── GET  /api/discover
+├── GET  /api/candidates
 ├── GET  /api/swipes
-├── POST /api/swipe
-└── GET  /api/swipe/pending
+└── POST /api/swipe
+
+Matches and Messages
+├── GET    /api/matches
+├── DELETE /api/matches/:matchId
+├── GET    /api/matches/:matchId/messages
+├── POST   /api/matches/:matchId/messages
+└── GET    /api/matches/:matchId/ws
+
+Media and Device
+├── GET /api/upload-url
+└── PUT /api/device-token
 ```
 
-## Data Flow
+## Key Flows
 
-### Swipe Flow
-1. Frontend: User swipes (left/right)
-2. Frontend: Send POST /api/swipe to backend
-3. Backend: Record swipe in Cassandra
-4. Backend: Check for mutual swipe (match)
-5. Backend: If match, broadcast notification via WebSocket
-6. Frontend: Receive notification, show match alert
+### Authentication
+1. User registers or logs in with email/password.
+2. Backend normalizes email, validates credentials, and returns a JWT plus user object.
+3. Frontend stores token and user locally.
+4. Axios attaches the JWT on protected requests.
+5. Backend middleware validates the token and sets `userID` in request context.
+6. On app start, frontend restores the token and validates the session with `GET /api/me`.
 
-### Authentication Flow
-1. Frontend: User logs in
-2. Backend: Verify credentials
-3. Backend: Generate JWT token
-4. Frontend: Store token in secure storage
-5. Frontend: Include token in all API requests
-6. Backend: Validate token via middleware
+### Swipe and Match
+1. Frontend sends `POST /api/swipe`.
+2. Backend writes the swipe to `swipes` and `swipes_by_target`.
+3. For right swipes, Redis atomically records the pair in `swipe:right:{min}:{max}`.
+4. When Redis sees both users in the set, exactly one request creates the match.
+5. Backend writes `matches` and both users' `matches_by_user` rows.
+6. Push notifications are sent asynchronously through `notifyMatch`.
 
-## Deployment Considerations
+### Messaging
+1. Backend checks that the current user belongs to the match.
+2. Messages are written to `messages`.
+3. `latest_messages_by_match` is updated for inbox previews.
+4. The local WebSocket hub immediately broadcasts the message to clients connected to the same backend replica.
+5. The hub also publishes the message to Redis Pub/Sub.
+6. Other backend replicas receive the Redis event and broadcast it to their own connected clients in that match room.
 
-### Development
-- Local Docker Cassandra
-- Backend runs on localhost:8080
-- Frontend runs via Expo CLI
+## Development Deployment
 
-### Production
-- Backend: Deployed on AWS ECS/EKS or similar
-- Database: Cassandra cluster (3+ nodes minimum)
-- Frontend: Built and deployed to Apple App Store
-- CDN: For static assets if needed
+- `docker compose up -d --build --scale backend=3` starts Cassandra, Redis, MinIO, Nginx, and three backend replicas.
+- Nginx maps host port `8000` to backend replicas on port `8080` inside the Docker network.
+- Expo iOS simulator should use `http://localhost:8000`.
+- A physical device should use the Mac's LAN IP with port `8000`.
 
-## Security
+## Production Considerations
 
-- JWT for API authentication
-- HTTPS/TLS for all traffic
-- Password hashing with bcrypt
-- Input validation and sanitization
-- Rate limiting on endpoints
-- CORS configuration for frontend
-
-## Future Enhancements
-
-- [ ] Real-time messaging system
-- [ ] Advanced matching algorithm (ML-based)
-- [ ] Payment integration
-- [ ] Video profiles
-- [ ] Social media integration
-- [ ] Analytics dashboard
-- [ ] Multi-language support
+- Use a multi-node Cassandra deployment or a managed Cassandra-compatible service.
+- Replace development startup backfills with explicit migration/backfill jobs.
+- Set `ENVIRONMENT=production`, `GIN_MODE=release`, and a real `JWT_SECRET`.
+- Put the API behind HTTPS and a load balancer.
+- Use durable object storage instead of local MinIO.
+- Add rate limiting, structured logs, request IDs, and metrics before public launch.

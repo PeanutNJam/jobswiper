@@ -56,7 +56,7 @@ npm run web
 Create `.env` file in this directory:
 
 ```
-REACT_APP_API_URL=http://localhost:8080/api
+EXPO_PUBLIC_API_URL=http://localhost:8000
 REACT_APP_API_TIMEOUT=30000
 ```
 

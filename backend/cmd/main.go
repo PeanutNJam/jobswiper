@@ -67,7 +67,8 @@ func main() {
 		log.Printf("[S3] AWS_BUCKET not configured")
 	}
 
-	msgHub := hub.New()
+	msgHub := hub.New(cfg.RedisAddr)
+	defer msgHub.Close()
 	go msgHub.Run()
 
 	h := handlers.NewHandler(cassandraDB, cfg.JWTSecret, matchQ, s3Client, msgHub)

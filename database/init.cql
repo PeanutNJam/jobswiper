@@ -14,7 +14,25 @@ CREATE TABLE IF NOT EXISTS jobswiper.users (
     updated_at   TIMESTAMP
 );
 
-CREATE INDEX IF NOT EXISTS idx_users_email ON jobswiper.users (email);
+CREATE TABLE IF NOT EXISTS jobswiper.users_by_email (
+    email         TEXT PRIMARY KEY,
+    id            UUID,
+    username      TEXT,
+    password_hash TEXT,
+    user_type     TEXT,
+    created_at    TIMESTAMP,
+    updated_at    TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS jobswiper.users_by_type (
+    user_type  TEXT,
+    created_at TIMESTAMP,
+    id         UUID,
+    email      TEXT,
+    username   TEXT,
+    updated_at TIMESTAMP,
+    PRIMARY KEY ((user_type), created_at, id)
+) WITH CLUSTERING ORDER BY (created_at DESC, id ASC);
 
 CREATE TABLE IF NOT EXISTS jobswiper.profiles (
     user_id     UUID PRIMARY KEY,
@@ -45,6 +63,15 @@ CREATE TABLE IF NOT EXISTS jobswiper.swipes (
     PRIMARY KEY (user_id, target_id)
 );
 
+CREATE TABLE IF NOT EXISTS jobswiper.swipes_by_target (
+    target_id  UUID,
+    user_id    UUID,
+    id         UUID,
+    direction  TEXT,
+    created_at TIMESTAMP,
+    PRIMARY KEY ((target_id), user_id)
+);
+
 CREATE TABLE IF NOT EXISTS jobswiper.matches (
     id        UUID PRIMARY KEY,
     user_id_1 UUID,
@@ -52,17 +79,32 @@ CREATE TABLE IF NOT EXISTS jobswiper.matches (
     created_at TIMESTAMP
 );
 
-CREATE INDEX IF NOT EXISTS idx_matches_user1 ON jobswiper.matches (user_id_1);
-CREATE INDEX IF NOT EXISTS idx_matches_user2 ON jobswiper.matches (user_id_2);
+CREATE TABLE IF NOT EXISTS jobswiper.matches_by_user (
+    user_id    UUID,
+    created_at TIMESTAMP,
+    id         UUID,
+    user_id_1  UUID,
+    user_id_2  UUID,
+    PRIMARY KEY ((user_id), created_at, id)
+) WITH CLUSTERING ORDER BY (created_at DESC, id ASC);
 
 -- Messages (for in-app chat)
 CREATE TABLE IF NOT EXISTS jobswiper.messages (
-    match_id   UUID,
+    match_id   TEXT,
     created_at TIMESTAMP,
-    sender_id  UUID,
+    id         TEXT,
+    sender_id  TEXT,
     content    TEXT,
-    PRIMARY KEY (match_id, created_at)
-) WITH CLUSTERING ORDER BY (created_at DESC);
+    PRIMARY KEY ((match_id), created_at, id)
+) WITH CLUSTERING ORDER BY (created_at ASC, id ASC);
+
+CREATE TABLE IF NOT EXISTS jobswiper.latest_messages_by_match (
+    match_id   TEXT PRIMARY KEY,
+    created_at TIMESTAMP,
+    id         TEXT,
+    sender_id  TEXT,
+    content    TEXT
+);
 
 -- Notifications
 CREATE TABLE IF NOT EXISTS jobswiper.notifications (

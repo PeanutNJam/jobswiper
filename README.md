@@ -6,7 +6,9 @@ A full-stack application connecting job seekers with employers using a swipe-bas
 
 - **Frontend**: React Native + Expo (TypeScript) - iOS compatible
 - **Backend**: Go with Gin framework
-- **Database**: Apache Cassandra
+- **Database**: Apache Cassandra with query-specific read models
+- **Coordination**: Redis for atomic mutual-swipe detection and cross-replica chat Pub/Sub
+- **Storage**: MinIO/S3-compatible profile image storage
 - **Infrastructure**: Docker for local development and cloud deployment
 
 ## Project Structure
@@ -38,17 +40,15 @@ npm start
 ### Setup Backend
 
 ```bash
-cd backend
-go mod download
-go run cmd/main.go
+docker compose up -d --build --scale backend=3
 ```
 
-### Setup Database
+The API is available at `http://localhost:8000` through the Nginx load balancer. Backend replicas listen on port `8080` inside the Docker network.
+
+### Setup Database and Services
 
 ```bash
-docker-compose up -d cassandra
-# Wait for Cassandra to be ready (check logs)
-# Then run migrations (to be implemented)
+docker compose up -d cassandra redis minio
 ```
 
 ## Architecture Overview
@@ -63,12 +63,14 @@ docker-compose up -d cassandra
 - RESTful API for matching algorithm
 - User authentication & authorization
 - Job & profile management
-- WebSocket for real-time updates
+- WebSocket for real-time chat updates
+- Redis-backed mutual-swipe coordination and chat fanout
+- Nginx load balancer for multiple backend replicas
 
 ### Database (Cassandra)
 - Distributed, horizontally scalable
-- Time-series data for match history
-- User sessions & notifications
+- Query-shaped tables for login, discovery, candidates, match inboxes, and chat previews
+- Time-clustered data for match and message history
 - Optimized for high-throughput reads/writes
 
 ## Environment Configuration

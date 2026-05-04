@@ -58,14 +58,12 @@ services:
     networks:
       - jobswiper-network
 
-  # Optional: Backend service (uncomment when ready)
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    container_name: jobswiper-api
-    ports:
-      - "8000:8080"
+    expose:
+      - "8080"
     environment:
       - CASSANDRA_HOST=cassandra
       - CASSANDRA_PORT=9042
@@ -84,11 +82,18 @@ services:
         condition: service_healthy
     networks:
       - jobswiper-network
-  #   depends_on:
-  #     cassandra:
-  #       condition: service_healthy
-  #   networks:
-  #     - jobswiper-network
+
+  load-balancer:
+    build:
+      context: ./deploy
+      dockerfile: nginx.Dockerfile
+    container_name: jobswiper-lb
+    ports:
+      - "8000:80"
+    depends_on:
+      - backend
+    networks:
+      - jobswiper-network
 
 volumes:
   cassandra_data:

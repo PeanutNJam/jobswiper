@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -67,6 +68,12 @@ func (h *Handler) Register(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
+	req.Username = strings.TrimSpace(req.Username)
+	if req.Email == "" || req.Username == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "email and username are required"})
+		return
+	}
 
 	if existing, _, err := h.db.GetUserByEmail(req.Email); err == nil && existing != nil {
 		c.JSON(http.StatusConflict, gin.H{"error": "email already registered"})
@@ -116,6 +123,11 @@ func (h *Handler) Login(c *gin.Context) {
 	var req loginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
+	if req.Email == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "email is required"})
 		return
 	}
 
@@ -442,8 +454,7 @@ func (h *Handler) GetMatches(c *gin.Context) {
 			r.OtherUserName = p.Name
 			r.OtherUserPhoto = p.PhotoURL
 		}
-		if messages, err := h.db.GetMessagesByMatchID(m.ID); err == nil && len(messages) > 0 {
-			last := messages[len(messages)-1]
+		if last, err := h.db.GetLatestMessageByMatchID(m.ID); err == nil {
 			r.LastMessage = last.Content
 			r.LastMessageAt = last.CreatedAt
 		}
@@ -480,7 +491,7 @@ func (h *Handler) DeleteMatch(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete messages"})
 		return
 	}
-	if err := h.db.DeleteMatchByID(matchID); err != nil {
+	if err := h.db.DeleteMatch(match); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete match"})
 		return
 	}
