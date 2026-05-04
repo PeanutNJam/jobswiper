@@ -11,6 +11,17 @@ import { useNotifications } from './src/hooks/useNotifications';
 import api from './src/services/api';
 import { Colors } from './src/constants/colors';
 
+const startupTimeout = 6000;
+
+function withStartupTimeout<T>(promise: Promise<T>): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => {
+      setTimeout(() => reject(new Error('Startup request timed out')), startupTimeout);
+    }),
+  ]);
+}
+
 function AppContent() {
   const isLoggedIn = useAuthStore(state => state.isLoggedIn);
   const profile    = useAuthStore(state => state.profile);
@@ -27,7 +38,7 @@ function AppContent() {
 
         let user = await api.getStoredUser();
         try {
-          user = await api.getMe();
+          user = await withStartupTimeout(api.getMe());
           await api.setStoredUser(user);
         } catch {
           if (!user) throw new Error('No stored user');
@@ -37,7 +48,7 @@ function AppContent() {
         setUser(user);
 
         try {
-          const nextProfile = await api.getProfile();
+          const nextProfile = await withStartupTimeout(api.getProfile());
           if (mounted) setProfile(nextProfile);
         } catch {
           if (mounted) setProfile(null);
