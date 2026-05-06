@@ -415,7 +415,7 @@ const styles = StyleSheet.create({
   content:   { paddingBottom: 48 },
   header: {
     fontSize: 28, fontWeight: '700', color: Colors.text1,
-    paddingHorizontal: 20, paddingTop: 60, paddingBottom: 24,
+    paddingHorizontal: 20, paddingTop: 76, paddingBottom: 24,
   },
   avatarRow:      { alignItems: 'center', marginBottom: 16 },
   avatar:         { width: 84, height: 84, borderRadius: 42, backgroundColor: Colors.primary, alignItems: 'center', justifyContent: 'center' },

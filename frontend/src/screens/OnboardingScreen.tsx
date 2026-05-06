@@ -151,7 +151,7 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
   scroll:    { flexGrow: 1, paddingBottom: 48 },
 
-  header: { alignItems: 'center', paddingTop: 72, paddingBottom: 32, paddingHorizontal: 32 },
+  header: { alignItems: 'center', paddingTop: 76, paddingBottom: 32, paddingHorizontal: 32 },
   emoji:    { fontSize: 52, marginBottom: 16 },
   title:    { fontSize: 26, fontWeight: '700', color: Colors.text1, marginBottom: 8, textAlign: 'center' },
   subtitle: { fontSize: 15, color: Colors.text2, textAlign: 'center', lineHeight: 22 },

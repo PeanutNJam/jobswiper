@@ -164,7 +164,7 @@ export default function CandidatesScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
   center:    { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: Colors.background },
-  header: { fontSize: 28, fontWeight: '700', color: Colors.text1, paddingHorizontal: 20, paddingTop: 60, paddingBottom: 2 },
+  header: { fontSize: 28, fontWeight: '700', color: Colors.text1, paddingHorizontal: 20, paddingTop: 76, paddingBottom: 2 },
   subheader: { fontSize: 14, color: Colors.text3, paddingHorizontal: 20, marginBottom: 16 },
   cardStack: { flex: 1, alignItems: 'center', justifyContent: 'center', marginHorizontal: 16 },
   card: {
