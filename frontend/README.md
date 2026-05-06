@@ -8,6 +8,8 @@ React Native + Expo mobile application for job matching (Tinder-style interface)
 - **Target**: iOS (with Android support)
 - **UI Pattern**: Swipe-based matching
 - **State Management**: Zustand
+- **Navigation**: React Navigation bottom tabs
+- **Icons**: Hugeicons React Native
 
 ## Project Structure
 
@@ -57,16 +59,39 @@ Create `.env` file in this directory:
 
 ```
 EXPO_PUBLIC_API_URL=http://localhost:8000
-REACT_APP_API_TIMEOUT=30000
+EXPO_PUBLIC_API_TIMEOUT=30000
 ```
 
-## Key Features (To be implemented)
+## Key Features
 
-- [ ] User authentication (Login/Register/Social auth)
-- [ ] Swipe interface for job matching
-- [ ] User profile management
-- [ ] Job/Employer profile management
-- [ ] Match history & analytics
-- [ ] In-app messaging
-- [ ] Push notifications
-- [ ] Offline support
+- User authentication and session restore
+- Job seeker swipe deck for job discovery
+- Employer swipe deck for applicant review
+- Profile editing with photo uploads and skill chips
+- Employer job creation with required skills
+- Employer job analytics for swipes, interested applicants, and matches
+- Employer conversations grouped by job post
+- In-app chat with WebSocket updates
+- Profile popups from chat headers and conversation avatars
+- Push notification registration
+
+## Main Screens
+
+- `AuthScreen`: login, registration, and user type selection.
+- `OnboardingScreen`: initial profile setup.
+- `SwipeScreen`: job seeker job discovery.
+- `CandidatesScreen`: employer applicant review for candidates who swiped right on employer jobs.
+- `MatchesScreen`: conversations; employers see an accordion grouped by job post.
+- `ConversationScreen`: real-time chat and matched profile popup.
+- `ProfileScreen`: profile editing plus employer job posting and job analytics.
+
+## Useful Commands
+
+```bash
+npm install
+npm start
+npm run ios
+npm run android
+npm run web
+npx tsc --noEmit
+```

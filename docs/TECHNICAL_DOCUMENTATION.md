@@ -5,11 +5,15 @@
 JobSwiper is a mobile-first job matching application inspired by dating apps like Tinder. It allows job seekers to swipe through job opportunities and employers to swipe through candidate profiles, creating mutual matches for potential job placements. The application features real-time notifications, in-app messaging, and profile management.
 
 ### Key Features
-- **Swipe-based matching**: Intuitive left/right swipe interface for job matching
+- **Swipe-based matching**: Job seekers swipe on jobs; employers review interested candidates
 - **Dual user types**: Support for both job seekers and employers
+- **Employer job posting**: Employers create jobs with required skills
+- **Employer job analytics**: Job cards show total swipes, interested applicants, and match counts
+- **Applicant review**: Employers see candidates who swiped right on their jobs
 - **Real-time notifications**: Push notifications for matches and messages
-- **In-app messaging**: WebSocket-based chat between matched users
-- **Profile management**: Comprehensive user profiles with photos and descriptions
+- **In-app messaging**: WebSocket-based chat between matched users; employers see conversations grouped by job post
+- **Profile viewing**: Matched users can open profile popups from chat headers or conversation avatars
+- **Profile management**: User profiles with photos, descriptions, locations, and skills
 - **Image uploads**: S3-compatible storage for profile pictures
 - **Cross-platform**: iOS and Android support via React Native
 
@@ -23,6 +27,8 @@ JobSwiper follows a three-tier architecture with clear separation of concerns:
 │  - Swipe interface                                      │
 │  - User authentication                                  │
 │  - Profile management                                   │
+│  - Employer job posting and analytics                   │
+│  - Job-grouped employer conversation inbox              │
 │  - Real-time messaging                                  │
 └──────────────────────┬──────────────────────────────────┘
                        │ HTTPS/REST + WebSocket
@@ -55,7 +61,7 @@ JobSwiper follows a three-tier architecture with clear separation of concerns:
 - User interface and experience
 - State management
 - API communication
-- Offline data persistence
+- Auth/session persistence
 - Push notification handling
 
 #### Backend
@@ -79,9 +85,8 @@ JobSwiper follows a three-tier architecture with clear separation of concerns:
 - **TypeScript 5.3.0**: Type-safe JavaScript development
 
 ### Key Dependencies
-- **Navigation**: 
+- **Navigation**:
   - `@react-navigation/native` (6.1.6)
-  - `@react-navigation/native-stack` (7.14.12)
   - `@react-navigation/bottom-tabs` (6.5.10)
 - **State Management**: `zustand` (4.4.0) - Lightweight state management
 - **HTTP Client**: `axios` (1.6.0) - Promise-based HTTP client
@@ -240,6 +245,29 @@ CREATE TABLE profiles (
     updated_at TIMESTAMP
 );
 
+-- Canonical jobs table
+CREATE TABLE jobs (
+    id UUID PRIMARY KEY,
+    employer_id UUID,
+    title TEXT,
+    description TEXT,
+    location TEXT,
+    skills LIST<TEXT>,
+    created_at TIMESTAMP
+);
+
+-- Employer-owned jobs read model
+CREATE TABLE jobs_by_employer (
+    employer_id UUID,
+    created_at TIMESTAMP,
+    id UUID,
+    title TEXT,
+    description TEXT,
+    location TEXT,
+    skills LIST<TEXT>,
+    PRIMARY KEY ((employer_id), created_at, id)
+) WITH CLUSTERING ORDER BY (created_at DESC, id ASC);
+
 -- Swipes made by a user
 CREATE TABLE swipes (
     user_id UUID,
@@ -301,10 +329,13 @@ CREATE TABLE latest_messages_by_match (
 #### Query Patterns
 - **Login**: `users_by_email` by normalized email.
 - **Session restore**: `users` by JWT user id through `GET /api/me`.
-- **Discovery**: `users_by_type`, then profiles by `user_id`.
+- **Discovery**: job seekers read jobs; employers read job seekers through `users_by_type`.
+- **Employer jobs**: `jobs_by_employer` partitioned by employer id.
 - **Swipe history**: `swipes` partitioned by `user_id`.
-- **Employer candidates**: `swipes_by_target` partitioned by target user id.
+- **Employer candidates**: `swipes_by_target` partitioned by job id, then profiles by candidate user id.
+- **Employer job analytics**: per-job swipe counts come from `swipes_by_target`; match counts are derived from `matches_by_user`.
 - **Matches inbox**: `matches_by_user` partitioned by current user id.
+- **Matched profile popup**: match authorization through `matches`, then profile lookup by other user id.
 - **Chat history**: `messages` partitioned by match id.
 - **Latest message preview**: `latest_messages_by_match`.
 
@@ -389,15 +420,29 @@ GET  /api/profile               # Get user profile
 PUT  /api/profile               # Update user profile
 GET  /api/swipes                # Get user's swipes
 POST /api/swipe                 # Create a swipe
-GET  /api/candidates            # Get potential matches
-GET  /api/discover              # Discover new profiles
+GET  /api/candidates            # Employer applicants who swiped right on employer jobs
+GET  /api/discover              # Discover jobs or users depending on role
+POST /api/jobs                  # Employer creates a job with required skills
+GET  /api/jobs                  # Get jobs; employers receive stats and matched users
+GET  /api/jobs/:jobId           # Get one job
+PUT  /api/jobs/:jobId           # Update an employer-owned job
+DELETE /api/jobs/:jobId         # Delete an employer-owned job
 GET  /api/matches               # Get user's matches
 DELETE /api/matches/:matchId         # Delete a match
+GET  /api/matches/:matchId/profile   # Get the other matched user's profile
 GET  /api/matches/:matchId/messages  # Get match messages
 POST /api/matches/:matchId/messages  # Send a message
 GET  /api/upload-url            # Get S3 upload URL
 PUT  /api/device-token          # Save device token for notifications
 ```
+
+### Product Workflow Details
+
+- **Job seeker discovery**: `GET /api/discover` returns jobs. A right swipe uses the job id as `target_id`.
+- **Employer candidates**: `GET /api/candidates` walks the employer's jobs and returns candidates who swiped right on any of those job ids.
+- **Employer job analytics**: `GET /api/jobs` returns employer jobs with `swipe_count`, `right_swipe_count`, `matched_count`, and `matched_users`.
+- **Employer conversations**: the frontend groups matches under employer job posts using `matched_users` from `GET /api/jobs` and match ids from `GET /api/matches`.
+- **Profile popups**: `GET /api/matches/:matchId/profile` returns only the other user's profile, and only if the requester is part of that match.
 
 ### WebSocket API
 - **Endpoint**: `/api/matches/:matchId/ws`
@@ -452,7 +497,7 @@ Responses are JSON. Successful responses are shaped per endpoint, for example `{
 ### Mobile Performance
 - **Lazy Loading**: Components and data loaded on demand
 - **Image Optimization**: Efficient image loading and caching
-- **Offline Support**: Local storage for offline functionality
+- **Session Persistence**: Auth tokens and stored users are kept in AsyncStorage for startup restore
 
 ### Scalability
 - **Horizontal Scaling**: Cassandra's distributed nature
@@ -464,7 +509,7 @@ Responses are JSON. Successful responses are shaped per endpoint, for example `{
 ### Prerequisites
 - **System**: macOS 12+, Linux, or Windows with Docker
 - **Node.js**: 18+ with npm 9+
-- **Go**: 1.21+
+- **Go**: 1.24+
 - **Docker**: Desktop with Docker Compose
 - **Git**: Version control
 
