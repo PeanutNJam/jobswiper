@@ -21,9 +21,13 @@ export interface Job {
   employerId: string;
   title: string;
   description: string;
-  salary?: string;
   location: string;
+  skills?: string[];
   createdAt: string;
+  swipeCount?: number;
+  rightSwipeCount?: number;
+  matchedCount?: number;
+  matchedUsers?: Candidate[];
 }
 
 export interface Swipe {
@@ -77,6 +81,15 @@ export interface DiscoverUser {
   photoUrl?: string;
   location: string;
   skills?: string[];
+}
+
+export interface DiscoverJob {
+  jobId: string;
+  title: string;
+  description: string;
+  location: string;
+  skills?: string[];
+  employerName: string;
 }
 
 export interface MatchDetail {

@@ -57,9 +57,9 @@ export default function MainNavigation() {
           tabBarStyle: {
             backgroundColor: Colors.tabBar,
             borderTopWidth: 0,
-            height: 68,
+            height: 76,
             paddingTop: 7,
-            paddingBottom: 10,
+            paddingBottom: 18,
             shadowColor: Colors.text1,
             shadowOffset: { width: 0, height: -8 },
             shadowOpacity: 0.08,
@@ -94,9 +94,9 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
     lineHeight: 14,
-    marginTop: 3,
+    marginTop: 1,
   },
   tabLabelActive: {
-    marginTop: 3,
+    marginTop: 1,
   },
 });

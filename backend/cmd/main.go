@@ -37,7 +37,7 @@ func main() {
 
 	matchQ := matchqueue.NewClient(cfg.RedisAddr)
 	if err := matchQ.Ping(context.Background()); err != nil {
-		log.Fatalf("Failed to connect to Redis: %v", err)
+		log.Printf("Redis unavailable; continuing with Cassandra fallback for matches and local chat broadcast: %v", err)
 	}
 	defer matchQ.Close()
 
@@ -101,9 +101,15 @@ func main() {
 		protected.GET("/discover", h.GetDiscover)
 		protected.GET("/matches", h.GetMatches)
 		protected.DELETE("/matches/:matchId", h.DeleteMatch)
+		protected.GET("/matches/:matchId/profile", h.GetMatchProfile)
 		protected.GET("/matches/:matchId/messages", h.GetMessages)
 		protected.POST("/matches/:matchId/messages", h.SendMessage)
 		protected.GET("/matches/:matchId/ws", h.ChatWS)
+		protected.POST("/jobs", h.CreateJob)
+		protected.GET("/jobs", h.GetJobs)
+		protected.GET("/jobs/:jobId", h.GetJob)
+		protected.PUT("/jobs/:jobId", h.UpdateJob)
+		protected.DELETE("/jobs/:jobId", h.DeleteJob)
 	}
 
 	port := cfg.Port

@@ -22,13 +22,13 @@ type Profile struct {
 }
 
 type Job struct {
-	ID          string `json:"id"`
-	EmployerID  string `json:"employer_id"`
-	Title       string `json:"title"`
-	Description string `json:"description"`
-	Salary      string `json:"salary"`
-	Location    string `json:"location"`
-	CreatedAt   int64  `json:"created_at"`
+	ID          string   `json:"id"`
+	EmployerID  string   `json:"employer_id"`
+	Title       string   `json:"title"`
+	Description string   `json:"description"`
+	Location    string   `json:"location"`
+	Skills      []string `json:"skills"`
+	CreatedAt   int64    `json:"created_at"`
 }
 
 type Swipe struct {

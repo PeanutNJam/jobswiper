@@ -3,8 +3,10 @@ import {
   View, Text, StyleSheet, Animated, PanResponder,
   Dimensions, TouchableOpacity, ActivityIndicator, Image,
 } from 'react-native';
+import { HugeiconsIcon } from '@hugeicons/react-native';
+import UserMultiple02Icon from '@hugeicons/core-free-icons/dist/esm/UserMultiple02Icon';
 import { Colors } from '../constants/colors';
-import { DiscoverUser } from '../types';
+import { Candidate } from '../types';
 import api from '../services/api';
 
 const { width: W } = Dimensions.get('window');
@@ -17,18 +19,19 @@ function avatarColor(name: string): string {
   return palette[h % palette.length] ?? '#0A66C2';
 }
 
-function CardContent({ candidate }: { candidate: DiscoverUser }) {
-  const color = avatarColor(candidate.name);
+function CardContent({ candidate }: { candidate: Candidate }) {
+  const displayName = candidate.name || 'Candidate';
+  const color = avatarColor(displayName);
   return (
     <>
       {candidate.photoUrl ? (
         <Image source={{ uri: candidate.photoUrl }} style={styles.avatarImage} />
       ) : (
         <View style={[styles.avatarCircle, { backgroundColor: color }]}>
-          <Text style={styles.avatarInitial}>{candidate.name[0]?.toUpperCase()}</Text>
+          <Text style={styles.avatarInitial}>{displayName[0]?.toUpperCase()}</Text>
         </View>
       )}
-      <Text style={styles.candidateName}>{candidate.name}</Text>
+      <Text style={styles.candidateName}>{displayName}</Text>
       {candidate.location ? <Text style={styles.location}>📍 {candidate.location}</Text> : null}
       {candidate.description ? (
         <Text style={styles.description} numberOfLines={4}>{candidate.description}</Text>
@@ -50,13 +53,13 @@ function CardContent({ candidate }: { candidate: DiscoverUser }) {
 }
 
 export default function CandidatesScreen() {
-  const [candidates, setCandidates] = useState<DiscoverUser[]>([]);
+  const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [loading, setLoading] = useState(true);
   const pan = useRef(new Animated.ValueXY()).current;
 
   const load = () => {
     setLoading(true);
-    api.getDiscover()
+    api.getCandidates()
       .then(setCandidates)
       .catch(() => {})
       .finally(() => setLoading(false));
@@ -109,9 +112,11 @@ export default function CandidatesScreen() {
   if (!candidates[0]) {
     return (
       <View style={styles.emptyContainer}>
-        <Text style={styles.emptyEmoji}>👥</Text>
+        <View style={styles.emptyIcon}>
+          <HugeiconsIcon icon={UserMultiple02Icon} size={50} color={Colors.primary} strokeWidth={1.9} />
+        </View>
         <Text style={styles.emptyTitle}>No candidates right now</Text>
-        <Text style={styles.emptySubtitle}>Check back soon</Text>
+        <Text style={styles.emptySubtitle}>Candidates who swipe right on your jobs will appear here</Text>
         <TouchableOpacity style={styles.resetBtn} onPress={load}>
           <Text style={styles.resetBtnText}>Refresh</Text>
         </TouchableOpacity>
@@ -121,7 +126,7 @@ export default function CandidatesScreen() {
 
   return (
     <View style={styles.container}>
-      <Text style={styles.header}>DiscoverUsers</Text>
+      <Text style={styles.header}>Candidates</Text>
       <Text style={styles.subheader}>Swipe right to connect · left to pass</Text>
 
       <View style={styles.cardStack}>
@@ -194,7 +199,15 @@ const styles = StyleSheet.create({
   actionConnect: { backgroundColor: Colors.primary },
   actionConnectIcon: { fontSize: 28, color: '#fff' },
   emptyContainer: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 40, backgroundColor: Colors.background },
-  emptyEmoji: { fontSize: 64, marginBottom: 16 },
+  emptyIcon: {
+    width: 86,
+    height: 86,
+    borderRadius: 43,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.primaryLight,
+    marginBottom: 16,
+  },
   emptyTitle: { fontSize: 22, fontWeight: '700', color: Colors.text1, marginBottom: 8 },
   emptySubtitle: { fontSize: 15, color: Colors.text2, textAlign: 'center', marginBottom: 32 },
   resetBtn: { backgroundColor: Colors.primary, borderRadius: 28, paddingHorizontal: 32, paddingVertical: 16, shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 4 },

@@ -6,7 +6,7 @@ import {
 import { HugeiconsIcon } from '@hugeicons/react-native';
 import Certificate01Icon from '@hugeicons/core-free-icons/dist/esm/Certificate01Icon';
 import { Colors } from '../constants/colors';
-import { DiscoverUser } from '../types';
+import { DiscoverUser, DiscoverJob } from '../types';
 import api from '../services/api';
 
 const { width: W } = Dimensions.get('window');
@@ -19,48 +19,82 @@ function avatarColor(name: string): string {
   return palette[h % palette.length] ?? '#0A66C2';
 }
 
-function Card({ user }: { user: DiscoverUser }) {
-  const color = avatarColor(user.name || user.username);
-  return (
-    <>
-      {user.photoUrl ? (
-        <Image source={{ uri: user.photoUrl }} style={styles.avatar} />
-      ) : (
-        <View style={[styles.avatar, styles.avatarPlaceholder, { backgroundColor: color }]}>
-          <Text style={styles.avatarInitial}>
-            {(user.name || user.username)[0]?.toUpperCase()}
-          </Text>
+function Card({ item }: { item: DiscoverUser | DiscoverJob }) {
+  const isJob = 'jobId' in item;
+
+  if (isJob) {
+    const job = item as DiscoverJob;
+    return (
+      <>
+        <View style={[styles.avatar, styles.avatarPlaceholder, { backgroundColor: '#0A66C2' }]}>
+          <Text style={styles.avatarInitial}>💼</Text>
         </View>
-      )}
-      <Text style={styles.name}>{user.name || user.username}</Text>
-      {user.location ? <Text style={styles.location}>📍 {user.location}</Text> : null}
-      {user.description ? (
-        <Text style={styles.description} numberOfLines={5}>{user.description}</Text>
-      ) : null}
-      {user.skills && user.skills.length > 0 && (
-        <View style={styles.skills}>
-          {user.skills.map(s => (
-            <View key={s} style={styles.skillChip}>
-              <Text style={styles.skillChipText}>{s}</Text>
+        <Text style={styles.name}>{job.title}</Text>
+        <Text style={styles.location}>🏢 {job.employerName}</Text>
+        {job.location ? <Text style={styles.location}>📍 {job.location}</Text> : null}
+        {job.description ? (
+          <Text style={styles.description} numberOfLines={5}>{job.description}</Text>
+        ) : null}
+        {job.skills && job.skills.length > 0 ? (
+          <View style={styles.requiredSkills}>
+            <Text style={styles.requiredSkillsTitle}>Skills required</Text>
+            <View style={styles.skills}>
+              {job.skills.map(s => (
+                <View key={s} style={styles.skillChip}>
+                  <Text style={styles.skillChipText}>{s}</Text>
+                </View>
+              ))}
             </View>
-          ))}
+          </View>
+        ) : null}
+        <View style={styles.chip}>
+          <Text style={styles.chipText}>Job</Text>
         </View>
-      )}
-      <View style={styles.chip}>
-        <Text style={styles.chipText}>Employer</Text>
-      </View>
-    </>
-  );
+      </>
+    );
+  } else {
+    const user = item as DiscoverUser;
+    return (
+      <>
+        {user.photoUrl ? (
+          <Image source={{ uri: user.photoUrl }} style={styles.avatar} />
+        ) : (
+          <View style={[styles.avatar, styles.avatarPlaceholder, { backgroundColor: avatarColor(user.name || user.username) }]}>
+            <Text style={styles.avatarInitial}>
+              {(user.name || user.username)[0]?.toUpperCase()}
+            </Text>
+          </View>
+        )}
+        <Text style={styles.name}>{user.name || user.username}</Text>
+        {user.location ? <Text style={styles.location}>📍 {user.location}</Text> : null}
+        {user.description ? (
+          <Text style={styles.description} numberOfLines={5}>{user.description}</Text>
+        ) : null}
+        {user.skills && user.skills.length > 0 && (
+          <View style={styles.skills}>
+            {user.skills.map(s => (
+              <View key={s} style={styles.skillChip}>
+                <Text style={styles.skillChipText}>{s}</Text>
+              </View>
+            ))}
+          </View>
+        )}
+        <View style={styles.chip}>
+          <Text style={styles.chipText}>Job Seeker</Text>
+        </View>
+      </>
+    );
+  }
 }
 
 export default function SwipeScreen() {
-  const [users,   setUsers]   = useState<DiscoverUser[]>([]);
+  const [items, setItems] = useState<(DiscoverUser | DiscoverJob)[]>([]);
   const [loading, setLoading] = useState(true);
   const pan = useRef(new Animated.ValueXY()).current;
 
   useEffect(() => {
     api.getDiscover()
-      .then(setUsers)
+      .then(setItems)
       .catch(() => {})
       .finally(() => setLoading(false));
   }, []);
@@ -71,13 +105,16 @@ export default function SwipeScreen() {
   const applyOpacity = pan.x.interpolate({ inputRange: [0, SWIPE_THRESHOLD / 2], outputRange: [0, 1], extrapolate: 'clamp' });
   const skipOpacity  = pan.x.interpolate({ inputRange: [-SWIPE_THRESHOLD / 2, 0], outputRange: [1, 0], extrapolate: 'clamp' });
 
-  const usersRef = useRef(users);
-  usersRef.current = users;
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
 
   const advanceCard = (dir: 'right' | 'left') => {
-    const top = usersRef.current[0];
-    if (top) api.createSwipe(top.userId, dir).catch(() => {});
-    setUsers(prev => prev.slice(1));
+    const top = itemsRef.current[0];
+    if (top) {
+      const targetId = 'jobId' in top ? top.jobId : top.userId;
+      api.createSwipe(targetId, dir).catch(() => {});
+    }
+    setItems(prev => prev.slice(1));
     pan.setValue({ x: 0, y: 0 });
   };
 
@@ -107,7 +144,7 @@ export default function SwipeScreen() {
     return <View style={styles.center}><ActivityIndicator size="large" color={Colors.primary} /></View>;
   }
 
-  if (!users[0]) {
+  if (!items[0]) {
     return (
       <View style={styles.emptyContainer}>
         <View style={styles.emptyIcon}>
@@ -115,7 +152,7 @@ export default function SwipeScreen() {
         </View>
         <Text style={styles.emptyTitle}>You're all caught up!</Text>
         <Text style={styles.emptySubtitle}>Check back later for more opportunities</Text>
-        <TouchableOpacity style={styles.resetBtn} onPress={() => { setLoading(true); api.getDiscover().then(setUsers).catch(() => {}).finally(() => setLoading(false)); }}>
+        <TouchableOpacity style={styles.resetBtn} onPress={() => { setLoading(true); api.getDiscover().then(setItems).catch(() => {}).finally(() => setLoading(false)); }}>
           <Text style={styles.resetBtnText}>Refresh</Text>
         </TouchableOpacity>
       </View>
@@ -128,9 +165,9 @@ export default function SwipeScreen() {
       <Text style={styles.subheader}>Swipe right to apply · left to skip</Text>
 
       <View style={styles.cardStack}>
-        {users[1] && (
+        {items[1] && (
           <View style={[styles.card, styles.cardBehind]}>
-            <Card user={users[1]} />
+            <Card item={items[1]} />
           </View>
         )}
         <Animated.View
@@ -143,7 +180,7 @@ export default function SwipeScreen() {
           <Animated.View style={[styles.badge, styles.badgeSkip, { opacity: skipOpacity }]}>
             <Text style={styles.badgeSkipText}>SKIP ✕</Text>
           </Animated.View>
-          <Card user={users[0]} />
+          <Card item={items[0]} />
         </Animated.View>
       </View>
 
@@ -183,6 +220,8 @@ const styles = StyleSheet.create({
   location: { fontSize: 14, color: Colors.text2, marginBottom: 12, textAlign: 'center' },
   description: { fontSize: 16, color: Colors.text2, lineHeight: 24, marginBottom: 16, textAlign: 'center' },
   skills: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 16, justifyContent: 'center' },
+  requiredSkills: { alignItems: 'center', marginBottom: 12 },
+  requiredSkillsTitle: { color: Colors.text3, fontSize: 12, fontWeight: '700', marginBottom: 2, textTransform: 'uppercase' },
   skillChip: { backgroundColor: Colors.tagBg, borderRadius: 20, paddingHorizontal: 12, paddingVertical: 6 },
   skillChipText: { color: Colors.primary, fontSize: 12, fontWeight: '600' },
   chip: { alignSelf: 'center', backgroundColor: Colors.primaryLight, borderRadius: 20, paddingHorizontal: 14, paddingVertical: 6 },

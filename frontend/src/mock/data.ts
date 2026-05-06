@@ -30,7 +30,6 @@ export const MOCK_JOBS: MockJob[] = [
     title: 'Senior Frontend Engineer',
     description:
       'Build beautiful, responsive interfaces using React Native and TypeScript. Own key product surfaces and collaborate with design, backend, and data teams to ship features used by millions.',
-    salary: '$150k – $180k',
     location: 'San Francisco, CA',
     createdAt: '2024-01-15',
     company: 'TechCorp',
@@ -43,7 +42,6 @@ export const MOCK_JOBS: MockJob[] = [
     title: 'Product Manager',
     description:
       'Drive product strategy and roadmap for a fast-growing B2B SaaS platform. Work cross-functionally to define requirements and ship features that delight customers and move key metrics.',
-    salary: '$130k – $160k',
     location: 'Remote',
     createdAt: '2024-01-14',
     company: 'StartupXYZ',
@@ -56,7 +54,6 @@ export const MOCK_JOBS: MockJob[] = [
     title: 'Backend Engineer (Go)',
     description:
       'Design and build high-throughput microservices in Go serving millions of requests per day. You will own critical infrastructure pieces and mentor junior engineers.',
-    salary: '$160k – $200k',
     location: 'New York, NY',
     createdAt: '2024-01-13',
     company: 'FinTech Inc',
@@ -69,7 +66,6 @@ export const MOCK_JOBS: MockJob[] = [
     title: 'ML Engineer',
     description:
       'Train, deploy, and monitor production ML models at scale. Build the infrastructure that bridges research and production, and work closely with data scientists to ship impactful models.',
-    salary: '$170k – $220k',
     location: 'Seattle, WA',
     createdAt: '2024-01-12',
     company: 'AI Labs',
@@ -82,7 +78,6 @@ export const MOCK_JOBS: MockJob[] = [
     title: 'iOS Engineer',
     description:
       'Build native iOS experiences for 10M+ users. You will own onboarding, core product flows, and performance — and have a direct line to users through App Store reviews.',
-    salary: '$140k – $170k',
     location: 'Austin, TX',
     createdAt: '2024-01-11',
     company: 'MobileFirst',
@@ -95,7 +90,6 @@ export const MOCK_JOBS: MockJob[] = [
     title: 'DevOps / Platform Engineer',
     description:
       'Own the developer experience: CI/CD pipelines, cloud infrastructure, observability, and on-call tooling. Help engineering teams ship faster and safer.',
-    salary: '$145k – $175k',
     location: 'Chicago, IL',
     createdAt: '2024-01-10',
     company: 'CloudBase',
@@ -108,7 +102,6 @@ export const MOCK_JOBS: MockJob[] = [
     title: 'Data Engineer',
     description:
       'Build reliable data pipelines powering analytics, recommendations, and product experimentation. Partner with ML and product teams to make trusted data available in real time.',
-    salary: '$135k – $165k',
     location: 'Boston, MA',
     createdAt: '2024-01-09',
     company: 'DataHarbor',
@@ -121,7 +114,6 @@ export const MOCK_JOBS: MockJob[] = [
     title: 'UX Designer',
     description:
       'Design elegant mobile workflows for hiring teams and candidates. Lead research, prototype quickly, and partner closely with engineering to ship polished product experiences.',
-    salary: '$120k – $150k',
     location: 'Los Angeles, CA',
     createdAt: '2024-01-08',
     company: 'Designly',
@@ -134,7 +126,6 @@ export const MOCK_JOBS: MockJob[] = [
     title: 'Security Engineer',
     description:
       'Own application security, threat modeling, and secure development practices across a fast-moving engineering org. Help teams ship confidently without slowing them down.',
-    salary: '$155k – $190k',
     location: 'Denver, CO',
     createdAt: '2024-01-07',
     company: 'SecureWorks Studio',
@@ -147,7 +138,6 @@ export const MOCK_JOBS: MockJob[] = [
     title: 'Customer Success Engineer',
     description:
       'Work directly with technical customers to onboard, debug integrations, and shape product improvements. Great fit for engineers who enjoy people and product strategy.',
-    salary: '$115k – $145k',
     location: 'Remote',
     createdAt: '2024-01-06',
     company: 'LaunchOps',

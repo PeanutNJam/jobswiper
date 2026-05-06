@@ -77,32 +77,32 @@ INSERT INTO jobswiper.profiles (user_id, name, description, photo_url, location,
 VALUES (aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa, 'SecureWorks Studio', 'Security tooling for teams that ship quickly. We help product engineers find and fix risk without losing momentum.', 'https://example.com/secureworks-logo.png', 'Denver, CO', toTimestamp(now()));
 
 -- Add jobs posted by these employers
-INSERT INTO jobswiper.jobs (id, employer_id, title, description, salary, location, created_at)
-VALUES (uuid(), 11111111-1111-1111-1111-111111111111, 'Senior Frontend Engineer', 'Build beautiful, responsive interfaces using React Native and TypeScript. Own key product surfaces and collaborate with design, backend, and data teams to ship features used by millions.', '$150k – $180k', 'San Francisco, CA', toTimestamp(now()));
+INSERT INTO jobswiper.jobs (id, employer_id, title, description, location, skills, created_at)
+VALUES (uuid(), 11111111-1111-1111-1111-111111111111, 'Senior Frontend Engineer', 'Build beautiful, responsive interfaces using React Native and TypeScript. Own key product surfaces and collaborate with design, backend, and data teams to ship features used by millions.', 'San Francisco, CA', ['React', 'TypeScript', 'Node.js'], toTimestamp(now()));
 
-INSERT INTO jobswiper.jobs (id, employer_id, title, description, salary, location, created_at)
-VALUES (uuid(), 22222222-2222-2222-2222-222222222222, 'Product Manager', 'Drive product strategy and roadmap for a fast-growing B2B SaaS platform. Work cross-functionally to define requirements and ship features that delight customers and move key metrics.', '$130k – $160k', 'Remote', toTimestamp(now()));
+INSERT INTO jobswiper.jobs (id, employer_id, title, description, location, skills, created_at)
+VALUES (uuid(), 22222222-2222-2222-2222-222222222222, 'Product Manager', 'Drive product strategy and roadmap for a fast-growing B2B SaaS platform. Work cross-functionally to define requirements and ship features that delight customers and move key metrics.', 'Remote', ['Strategy', 'Agile', 'Analytics'], toTimestamp(now()));
 
-INSERT INTO jobswiper.jobs (id, employer_id, title, description, salary, location, created_at)
-VALUES (uuid(), 33333333-3333-3333-3333-333333333333, 'Backend Engineer (Go)', 'Design and build high-throughput microservices in Go serving millions of requests per day. You will own critical infrastructure pieces and mentor junior engineers.', '$160k – $200k', 'New York, NY', toTimestamp(now()));
+INSERT INTO jobswiper.jobs (id, employer_id, title, description, location, skills, created_at)
+VALUES (uuid(), 33333333-3333-3333-3333-333333333333, 'Backend Engineer (Go)', 'Design and build high-throughput microservices in Go serving millions of requests per day. You will own critical infrastructure pieces and mentor junior engineers.', 'New York, NY', ['Go', 'PostgreSQL', 'Kubernetes'], toTimestamp(now()));
 
-INSERT INTO jobswiper.jobs (id, employer_id, title, description, salary, location, created_at)
-VALUES (uuid(), 44444444-4444-4444-4444-444444444444, 'ML Engineer', 'Train, deploy, and monitor production ML models at scale. Build the infrastructure that bridges research and production, and work closely with data scientists to ship impactful models.', '$170k – $220k', 'Seattle, WA', toTimestamp(now()));
+INSERT INTO jobswiper.jobs (id, employer_id, title, description, location, skills, created_at)
+VALUES (uuid(), 44444444-4444-4444-4444-444444444444, 'ML Engineer', 'Train, deploy, and monitor production ML models at scale. Build the infrastructure that bridges research and production, and work closely with data scientists to ship impactful models.', 'Seattle, WA', ['Python', 'PyTorch', 'MLOps'], toTimestamp(now()));
 
-INSERT INTO jobswiper.jobs (id, employer_id, title, description, salary, location, created_at)
-VALUES (uuid(), 55555555-5555-5555-5555-555555555555, 'iOS Engineer', 'Build native iOS experiences for 10M+ users. You will own onboarding, core product flows, and performance — and have a direct line to users through App Store reviews.', '$140k – $170k', 'Austin, TX', toTimestamp(now()));
+INSERT INTO jobswiper.jobs (id, employer_id, title, description, location, skills, created_at)
+VALUES (uuid(), 55555555-5555-5555-5555-555555555555, 'iOS Engineer', 'Build native iOS experiences for 10M+ users. You will own onboarding, core product flows, and performance — and have a direct line to users through App Store reviews.', 'Austin, TX', ['Swift', 'SwiftUI', 'CoreData'], toTimestamp(now()));
 
-INSERT INTO jobswiper.jobs (id, employer_id, title, description, salary, location, created_at)
-VALUES (uuid(), 66666666-6666-6666-6666-666666666666, 'DevOps / Platform Engineer', 'Own the developer experience: CI/CD pipelines, cloud infrastructure, observability, and on-call tooling. Help engineering teams ship faster and safer.', '$145k – $175k', 'Chicago, IL', toTimestamp(now()));
+INSERT INTO jobswiper.jobs (id, employer_id, title, description, location, skills, created_at)
+VALUES (uuid(), 66666666-6666-6666-6666-666666666666, 'DevOps / Platform Engineer', 'Own the developer experience: CI/CD pipelines, cloud infrastructure, observability, and on-call tooling. Help engineering teams ship faster and safer.', 'Chicago, IL', ['AWS', 'Terraform', 'Docker'], toTimestamp(now()));
 
-INSERT INTO jobswiper.jobs (id, employer_id, title, description, salary, location, created_at)
-VALUES (uuid(), 88888888-8888-8888-8888-888888888888, 'Data Engineer', 'Build reliable data pipelines powering analytics, recommendations, and product experimentation. Partner with ML and product teams to make trusted data available in real time.', '$135k – $165k', 'Boston, MA', toTimestamp(now()));
+INSERT INTO jobswiper.jobs (id, employer_id, title, description, location, skills, created_at)
+VALUES (uuid(), 88888888-8888-8888-8888-888888888888, 'Data Engineer', 'Build reliable data pipelines powering analytics, recommendations, and product experimentation. Partner with ML and product teams to make trusted data available in real time.', 'Boston, MA', ['Spark', 'Python', 'Airflow'], toTimestamp(now()));
 
-INSERT INTO jobswiper.jobs (id, employer_id, title, description, salary, location, created_at)
-VALUES (uuid(), 99999999-9999-9999-9999-999999999999, 'UX Designer', 'Design elegant mobile workflows for hiring teams and candidates. Lead research, prototype quickly, and partner closely with engineering to ship polished product experiences.', '$120k – $150k', 'Los Angeles, CA', toTimestamp(now()));
+INSERT INTO jobswiper.jobs (id, employer_id, title, description, location, skills, created_at)
+VALUES (uuid(), 99999999-9999-9999-9999-999999999999, 'UX Designer', 'Design elegant mobile workflows for hiring teams and candidates. Lead research, prototype quickly, and partner closely with engineering to ship polished product experiences.', 'Los Angeles, CA', ['Figma', 'Research', 'Prototyping'], toTimestamp(now()));
 
-INSERT INTO jobswiper.jobs (id, employer_id, title, description, salary, location, created_at)
-VALUES (uuid(), aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa, 'Security Engineer', 'Own application security, threat modeling, and secure development practices across a fast-moving engineering org. Help teams ship confidently without slowing them down.', '$155k – $190k', 'Denver, CO', toTimestamp(now()));
+INSERT INTO jobswiper.jobs (id, employer_id, title, description, location, skills, created_at)
+VALUES (uuid(), aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa, 'Security Engineer', 'Own application security, threat modeling, and secure development practices across a fast-moving engineering org. Help teams ship confidently without slowing them down.', 'Denver, CO', ['AppSec', 'Go', 'Cloud'], toTimestamp(now()));
 
 -- Add some sample swipes (job seekers swiping on employers)
 -- First, let's add a sample job seeker user

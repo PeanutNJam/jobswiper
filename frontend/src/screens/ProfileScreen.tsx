@@ -1,12 +1,14 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, TextInput,
   ScrollView, Alert, Image, ActivityIndicator,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
+import { useFocusEffect } from '@react-navigation/native';
 import { useAuthStore } from '../store';
 import api from '../services/api';
 import { Colors } from '../constants/colors';
+import { Job } from '../types';
 
 function SkillsInput({ skills, onChange }: { skills: string[]; onChange: (s: string[]) => void }) {
   const [draft, setDraft] = useState('');
@@ -35,9 +37,17 @@ function SkillsInput({ skills, onChange }: { skills: string[]; onChange: (s: str
       {skills.length > 0 && (
         <View style={styles.skillChips}>
           {skills.map(s => (
-            <TouchableOpacity key={s} style={styles.skillChip} onPress={() => onChange(skills.filter(x => x !== s))}>
+            <TouchableOpacity
+              key={s}
+              style={styles.skillChip}
+              onPress={() => onChange(skills.filter(x => x !== s))}
+              activeOpacity={0.7}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
               <Text style={styles.skillChipText}>{s}</Text>
-              <Text style={styles.skillChipX}> ×</Text>
+              <View style={styles.removeChipBtn}>
+                <Text style={styles.removeChipText}>×</Text>
+              </View>
             </TouchableOpacity>
           ))}
         </View>
@@ -55,12 +65,39 @@ export default function ProfileScreen() {
   const [skills,         setSkills]         = useState<string[]>(profile?.skills ?? []);
   const [saving,         setSaving]         = useState(false);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const [jobs,           setJobs]           = useState<Job[]>([]);
+  const [loadingJobs,    setLoadingJobs]    = useState(false);
+  const [creatingJob,    setCreatingJob]    = useState(false);
+  const [jobTitle,       setJobTitle]       = useState('');
+  const [jobDescription, setJobDescription] = useState('');
+  const [jobLocation,    setJobLocation]    = useState('');
+  const [jobSkills,      setJobSkills]      = useState<string[]>([]);
+  const [expandedJobID,  setExpandedJobID]  = useState<string | null>(null);
+  const [focusedField,   setFocusedField]   = useState<string | null>(null);
 
   useEffect(() => {
     if (!profile) {
       api.getProfile().then(setProfile).catch(() => {});
     }
   }, []);
+
+  const loadJobs = useCallback(() => {
+    if (user?.userType !== 'employer') {
+      setJobs([]);
+      return;
+    }
+    setLoadingJobs(true);
+    api.getJobs()
+      .then(setJobs)
+      .catch(() => {})
+      .finally(() => setLoadingJobs(false));
+  }, [user?.userType]);
+
+  useFocusEffect(
+    useCallback(() => {
+      loadJobs();
+    }, [loadJobs])
+  );
 
   useEffect(() => {
     setName(profile?.name ?? '');
@@ -98,6 +135,35 @@ export default function ProfileScreen() {
         onPress: async () => { await api.clearToken(); logout(); },
       },
     ]);
+  };
+
+  const handleCreateJob = async () => {
+    const title = jobTitle.trim();
+    const descriptionText = jobDescription.trim();
+    const locationText = jobLocation.trim();
+    if (!title || !descriptionText) {
+      Alert.alert('Missing Details', 'Add a job title and description first.');
+      return;
+    }
+
+    setCreatingJob(true);
+    try {
+      const created = await api.createJob({
+        title,
+        description: descriptionText,
+        location: locationText,
+        skills: jobSkills,
+      });
+      setJobs(prev => [created, ...prev]);
+      setJobTitle('');
+      setJobDescription('');
+      setJobLocation('');
+      setJobSkills([]);
+    } catch {
+      Alert.alert('Error', 'Could not create job. Please try again.');
+    } finally {
+      setCreatingJob(false);
+    }
   };
 
   const handleChangePhoto = async () => {
@@ -148,16 +214,19 @@ export default function ProfileScreen() {
       {editing ? (
         <View style={styles.form}>
           <Text style={styles.label}>Name</Text>
-          <TextInput style={styles.input} value={name} onChangeText={setName}
+          <TextInput style={[styles.input, focusedField === 'name' && styles.inputFocused]} value={name} onChangeText={setName}
+            onFocus={() => setFocusedField('name')} onBlur={() => setFocusedField(null)}
             placeholder="Your name" placeholderTextColor={Colors.text3} />
 
           <Text style={styles.label}>About</Text>
-          <TextInput style={[styles.input, styles.textarea]} value={description} onChangeText={setDescription}
+          <TextInput style={[styles.input, styles.textarea, focusedField === 'description' && styles.inputFocused]} value={description} onChangeText={setDescription}
+            onFocus={() => setFocusedField('description')} onBlur={() => setFocusedField(null)}
             placeholder="Tell employers about yourself..." placeholderTextColor={Colors.text3}
             multiline numberOfLines={4} textAlignVertical="top" />
 
           <Text style={styles.label}>Location</Text>
-          <TextInput style={styles.input} value={location} onChangeText={setLocation}
+          <TextInput style={[styles.input, focusedField === 'location' && styles.inputFocused]} value={location} onChangeText={setLocation}
+            onFocus={() => setFocusedField('location')} onBlur={() => setFocusedField(null)}
             placeholder="City, State" placeholderTextColor={Colors.text3} />
 
           <Text style={styles.label}>Skills</Text>
@@ -213,6 +282,124 @@ export default function ProfileScreen() {
           <TouchableOpacity style={styles.editBtn} onPress={() => setEditing(true)}>
             <Text style={styles.editBtnText}>Edit Profile</Text>
           </TouchableOpacity>
+
+          {user?.userType === 'employer' && (
+            <View style={styles.jobsSection}>
+              <View style={styles.jobsHeader}>
+                <Text style={styles.jobsTitle}>Job Posts</Text>
+                <TouchableOpacity style={styles.refreshJobsBtn} onPress={loadJobs} disabled={loadingJobs}>
+                  <Text style={styles.refreshJobsText}>{loadingJobs ? 'Refreshing' : 'Refresh'}</Text>
+                </TouchableOpacity>
+              </View>
+
+              <View style={styles.jobFormCard}>
+                <Text style={styles.sectionTitle}>Add Job</Text>
+
+                <Text style={styles.label}>Title</Text>
+                <TextInput
+                  style={[styles.input, focusedField === 'jobTitle' && styles.inputFocused]}
+                  value={jobTitle}
+                  onChangeText={setJobTitle}
+                  onFocus={() => setFocusedField('jobTitle')}
+                  onBlur={() => setFocusedField(null)}
+                  placeholder="Product Manager"
+                  placeholderTextColor={Colors.text3}
+                />
+
+                <Text style={styles.label}>Description</Text>
+                <TextInput
+                  style={[styles.input, styles.textarea, focusedField === 'jobDescription' && styles.inputFocused]}
+                  value={jobDescription}
+                  onChangeText={setJobDescription}
+                  onFocus={() => setFocusedField('jobDescription')}
+                  onBlur={() => setFocusedField(null)}
+                  placeholder="What will this person own?"
+                  placeholderTextColor={Colors.text3}
+                  multiline
+                  numberOfLines={4}
+                  textAlignVertical="top"
+                />
+
+                <Text style={styles.label}>Location</Text>
+                <TextInput
+                  style={[styles.input, focusedField === 'jobLocation' && styles.inputFocused]}
+                  value={jobLocation}
+                  onChangeText={setJobLocation}
+                  onFocus={() => setFocusedField('jobLocation')}
+                  onBlur={() => setFocusedField(null)}
+                  placeholder="Remote, Singapore, etc."
+                  placeholderTextColor={Colors.text3}
+                />
+
+                <Text style={styles.label}>Skills Required</Text>
+                <Text style={styles.hint}>Tap a chip to remove it</Text>
+                <SkillsInput skills={jobSkills} onChange={setJobSkills} />
+
+                <TouchableOpacity style={styles.createJobBtn} onPress={handleCreateJob} disabled={creatingJob}>
+                  {creatingJob ? <ActivityIndicator color="#fff" /> : <Text style={styles.createJobBtnText}>Add Job</Text>}
+                </TouchableOpacity>
+              </View>
+
+              {loadingJobs ? (
+                <ActivityIndicator color={Colors.primary} style={styles.jobsLoader} />
+              ) : jobs.length > 0 ? (
+                jobs.map(job => {
+                  const expanded = expandedJobID === job.id;
+                  return (
+                    <View key={job.id} style={styles.jobCard}>
+                      <TouchableOpacity
+                        style={styles.jobCardHeader}
+                        onPress={() => setExpandedJobID(expanded ? null : job.id)}
+                        activeOpacity={0.75}
+                      >
+                        <View style={styles.jobCardHeaderText}>
+                          <Text style={styles.jobCardTitle}>{job.title}</Text>
+                          {job.location ? <Text style={styles.jobCardMeta}>📍 {job.location}</Text> : null}
+                        </View>
+                        <Text style={styles.accordionIcon}>{expanded ? '⌃' : '⌄'}</Text>
+                      </TouchableOpacity>
+
+                      <View style={styles.jobStatsRow}>
+                        <View style={styles.jobStatPill}>
+                          <Text style={styles.jobStatValue}>{job.swipeCount ?? 0}</Text>
+                          <Text style={styles.jobStatLabel}>Swipes</Text>
+                        </View>
+                        <View style={styles.jobStatPill}>
+                          <Text style={styles.jobStatValue}>{job.rightSwipeCount ?? 0}</Text>
+                          <Text style={styles.jobStatLabel}>Interested</Text>
+                        </View>
+                        <View style={styles.jobStatPill}>
+                          <Text style={styles.jobStatValue}>{job.matchedCount ?? job.matchedUsers?.length ?? 0}</Text>
+                          <Text style={styles.jobStatLabel}>Matched</Text>
+                        </View>
+                      </View>
+
+                      {expanded && (
+                        <View style={styles.accordionBody}>
+                          <Text style={styles.jobCardDescription}>{job.description}</Text>
+                          {(job.skills?.length ?? 0) > 0 && (
+                            <>
+                              <Text style={styles.miniSectionTitle}>Skills Required</Text>
+                              <View style={styles.skillChips}>
+                                {job.skills!.map(s => (
+                                  <View key={s} style={styles.skillChipView}>
+                                    <Text style={styles.skillChipText}>{s}</Text>
+                                  </View>
+                                ))}
+                              </View>
+                            </>
+                          )}
+
+                        </View>
+                      )}
+                    </View>
+                  );
+                })
+              ) : (
+                <Text style={styles.emptyJobsText}>No jobs posted yet.</Text>
+              )}
+            </View>
+          )}
         </View>
       )}
 
@@ -261,18 +448,73 @@ const styles = StyleSheet.create({
   },
   editBtnText: { color: '#fff', fontSize: 16, fontWeight: '600' },
 
+  jobsSection: { marginTop: 28 },
+  jobsHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 },
+  jobsTitle: { fontSize: 22, fontWeight: '700', color: Colors.text1 },
+  refreshJobsBtn: {
+    borderRadius: 18,
+    paddingHorizontal: 13,
+    paddingVertical: 7,
+    backgroundColor: Colors.tagBg,
+    borderWidth: 1,
+    borderColor: Colors.primaryLight,
+  },
+  refreshJobsText: { color: Colors.primary, fontSize: 13, fontWeight: '700' },
+  jobFormCard: {
+    backgroundColor: Colors.card, borderRadius: 20, padding: 20, marginBottom: 16,
+    shadowColor: '#000', shadowOpacity: 0.12, shadowRadius: 16, shadowOffset: { width: 0, height: 6 }, elevation: 6,
+    borderWidth: 1, borderColor: Colors.border,
+  },
+  createJobBtn: {
+    backgroundColor: Colors.primary, borderRadius: 24, paddingVertical: 14,
+    alignItems: 'center', marginTop: 22,
+  },
+  createJobBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
+  jobsLoader: { marginVertical: 16 },
+  jobCard: {
+    backgroundColor: Colors.card, borderRadius: 16, padding: 18, marginBottom: 12,
+    borderWidth: 1, borderColor: Colors.border,
+  },
+  jobCardHeader: { flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
+  jobCardHeaderText: { flex: 1, alignItems: 'flex-start' },
+  jobCardTitle: { alignSelf: 'stretch', fontSize: 18, fontWeight: '700', color: Colors.text1, marginBottom: 6, textAlign: 'left' },
+  jobCardMeta: { alignSelf: 'stretch', fontSize: 14, color: Colors.text2, marginBottom: 8, textAlign: 'left' },
+  jobCardDescription: { fontSize: 15, color: Colors.text2, lineHeight: 22 },
+  accordionIcon: { width: 32, textAlign: 'center', color: Colors.primary, fontSize: 24, fontWeight: '800' },
+  jobStatsRow: { flexDirection: 'row', gap: 8, marginTop: 12 },
+  jobStatPill: {
+    flex: 1, backgroundColor: Colors.tagBg, borderRadius: 12,
+    paddingVertical: 10, alignItems: 'center', borderWidth: 1, borderColor: Colors.primaryLight,
+  },
+  jobStatValue: { color: Colors.primary, fontSize: 17, fontWeight: '800' },
+  jobStatLabel: { color: Colors.text2, fontSize: 11, fontWeight: '700', marginTop: 2 },
+  accordionBody: { marginTop: 16, borderTopWidth: 1, borderTopColor: Colors.border, paddingTop: 14 },
+  miniSectionTitle: {
+    fontSize: 12, fontWeight: '800', color: Colors.text3,
+    textTransform: 'uppercase', marginTop: 14, marginBottom: 2,
+  },
+  emptyJobsText: { color: Colors.text2, fontSize: 15, textAlign: 'center', paddingVertical: 12 },
+
   form:    { paddingHorizontal: 20 },
   label:   { fontSize: 14, fontWeight: '600', color: Colors.text2, marginBottom: 8, marginTop: 20 },
   hint:    { fontSize: 13, color: Colors.text3, marginBottom: 8, marginTop: -4 },
   input:   {
-    backgroundColor: Colors.primaryLight, borderRadius: 12, paddingHorizontal: 16, paddingVertical: 14,
+    backgroundColor: Colors.card, borderRadius: 12, paddingHorizontal: 16, paddingVertical: 13,
     fontSize: 16, color: Colors.text1, borderWidth: 1, borderColor: Colors.border,
   },
-  textarea:{ height: 120 },
+  inputFocused: {
+    borderColor: Colors.primary,
+    shadowColor: Colors.primary,
+    shadowOpacity: 0.12,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2,
+  },
+  textarea:{ minHeight: 120, paddingTop: 14, lineHeight: 22 },
 
   skillRow:  { flexDirection: 'row', gap: 10 },
   skillInput:{
-    flex: 1, backgroundColor: Colors.primaryLight, borderRadius: 12,
+    flex: 1, backgroundColor: Colors.card, borderRadius: 12,
     paddingHorizontal: 16, paddingVertical: 14,
     fontSize: 16, color: Colors.text1, borderWidth: 1, borderColor: Colors.border,
   },
@@ -280,10 +522,11 @@ const styles = StyleSheet.create({
   addBtnText:{ color: '#fff', fontWeight: '700', fontSize: 16 },
 
   skillChips:   { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 12 },
-  skillChip:    { flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.tagBg, borderRadius: 20, paddingHorizontal: 14, paddingVertical: 8 },
+  skillChip:    { flexDirection: 'row', alignItems: 'center', backgroundColor: Colors.tagBg, borderRadius: 22, paddingLeft: 14, paddingRight: 8, paddingVertical: 8, minHeight: 44 },
   skillChipView:{ backgroundColor: Colors.tagBg, borderRadius: 20, paddingHorizontal: 14, paddingVertical: 8 },
   skillChipText:{ color: Colors.primary, fontSize: 14, fontWeight: '600' },
-  skillChipX:   { color: Colors.primary, fontSize: 18, fontWeight: '700' },
+  removeChipBtn:{ width: 24, height: 24, borderRadius: 12, marginLeft: 8, alignItems: 'center', justifyContent: 'center', backgroundColor: Colors.primaryLight },
+  removeChipText:{ color: Colors.primary, fontSize: 18, lineHeight: 20, fontWeight: '800' },
 
   editActions:  { flexDirection: 'row', gap: 16, marginTop: 32 },
   cancelBtn:    {

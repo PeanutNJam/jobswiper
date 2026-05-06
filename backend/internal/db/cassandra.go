@@ -100,10 +100,20 @@ func initializeTables(session *gocql.Session) error {
 			employer_id UUID,
 			title TEXT,
 			description TEXT,
-			salary TEXT,
 			location TEXT,
+			skills LIST<TEXT>,
 			created_at TIMESTAMP
 		)`,
+		`CREATE TABLE IF NOT EXISTS jobs_by_employer (
+			employer_id UUID,
+			created_at TIMESTAMP,
+			id UUID,
+			title TEXT,
+			description TEXT,
+			location TEXT,
+			skills LIST<TEXT>,
+			PRIMARY KEY ((employer_id), created_at, id)
+		) WITH CLUSTERING ORDER BY (created_at DESC, id ASC)`,
 		// Partition by user_id, cluster by target_id — allows efficient lookup of
 		// a specific (user, target) pair for match detection.
 		`CREATE TABLE IF NOT EXISTS swipes (
@@ -163,6 +173,8 @@ func initializeTables(session *gocql.Session) error {
 	// Cassandra returns an error if the column already exists; that's safe to ignore.
 	_ = session.Query(`ALTER TABLE profiles ADD device_token TEXT`).Exec()
 	_ = session.Query(`ALTER TABLE profiles ADD skills LIST<TEXT>`).Exec()
+	_ = session.Query(`ALTER TABLE jobs ADD skills LIST<TEXT>`).Exec()
+	_ = session.Query(`ALTER TABLE jobs_by_employer ADD skills LIST<TEXT>`).Exec()
 
 	return nil
 }
@@ -172,6 +184,9 @@ func backfillReadModels(session *gocql.Session) error {
 		return err
 	}
 	if err := backfillSwipes(session); err != nil {
+		return err
+	}
+	if err := backfillJobs(session); err != nil {
 		return err
 	}
 	if err := backfillMatches(session); err != nil {
@@ -213,6 +228,24 @@ func backfillSwipes(session *gocql.Session) error {
 			INSERT INTO swipes_by_target (target_id, user_id, id, direction, created_at)
 			VALUES (?, ?, ?, ?, ?)`,
 			targetID, userID, id, direction, createdAt,
+		).Exec(); err != nil {
+			_ = iter.Close()
+			return err
+		}
+	}
+	return iter.Close()
+}
+
+func backfillJobs(session *gocql.Session) error {
+	iter := session.Query(`SELECT id, employer_id, title, description, location, skills, created_at FROM jobs`).Iter()
+	var id, employerID, title, description, location string
+	var skills []string
+	var createdAt time.Time
+	for iter.Scan(&id, &employerID, &title, &description, &location, &skills, &createdAt) {
+		if err := session.Query(`
+			INSERT INTO jobs_by_employer (employer_id, created_at, id, title, description, location, skills)
+			VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			employerID, createdAt, id, title, description, location, skills,
 		).Exec(); err != nil {
 			_ = iter.Close()
 			return err
@@ -418,6 +451,25 @@ func (cdb *CassandraDB) GetSwipesByUserID(userID string) ([]models.Swipe, error)
 	return swipes, iter.Close()
 }
 
+func (cdb *CassandraDB) GetSwipesByTargetID(targetID string) ([]models.Swipe, error) {
+	iter := cdb.session.Query(`
+		SELECT user_id, target_id, id, direction, created_at
+		FROM swipes_by_target WHERE target_id = ?`,
+		targetID,
+	).Iter()
+
+	var swipes []models.Swipe
+	var s models.Swipe
+	var createdAt time.Time
+
+	for iter.Scan(&s.UserID, &s.TargetID, &s.ID, &s.Direction, &createdAt) {
+		s.CreatedAt = createdAt.UnixMilli()
+		swipes = append(swipes, s)
+	}
+
+	return swipes, iter.Close()
+}
+
 // GetSwipe fetches a specific swipe record, used to detect mutual matches.
 func (cdb *CassandraDB) GetSwipe(userID, targetID string) (*models.Swipe, error) {
 	var s models.Swipe
@@ -605,4 +657,108 @@ func (db *CassandraDB) GetSwipedTargetIDs(userID string) ([]string, error) {
 		ids = append(ids, tid)
 	}
 	return ids, iter.Close()
+}
+
+// ── Jobs ───────────────────────────────────────────────────────────────────
+
+func (db *CassandraDB) CreateJob(job *models.Job) error {
+	t := time.UnixMilli(job.CreatedAt)
+	batch := db.session.NewBatch(gocql.LoggedBatch)
+	batch.Query(`
+		INSERT INTO jobs (id, employer_id, title, description, location, skills, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		job.ID, job.EmployerID, job.Title, job.Description,
+		job.Location, job.Skills, t,
+	)
+	batch.Query(`
+		INSERT INTO jobs_by_employer (employer_id, created_at, id, title, description, location, skills)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		job.EmployerID, t, job.ID, job.Title, job.Description,
+		job.Location, job.Skills,
+	)
+	return db.session.ExecuteBatch(batch)
+}
+
+func (db *CassandraDB) GetJobByID(jobID string) (*models.Job, error) {
+	var job models.Job
+	var createdAt time.Time
+
+	err := db.session.Query(`
+		SELECT id, employer_id, title, description, location, skills, created_at
+		FROM jobs WHERE id = ?`,
+		jobID,
+	).Scan(
+		&job.ID, &job.EmployerID, &job.Title, &job.Description,
+		&job.Location, &job.Skills, &createdAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	job.CreatedAt = createdAt.UnixMilli()
+	return &job, nil
+}
+
+func (db *CassandraDB) GetJobsByEmployerID(employerID string) ([]models.Job, error) {
+	iter := db.session.Query(`
+		SELECT id, employer_id, title, description, location, skills, created_at
+		FROM jobs_by_employer WHERE employer_id = ?`,
+		employerID,
+	).Iter()
+
+	var jobs []models.Job
+	var job models.Job
+	var createdAt time.Time
+
+	for iter.Scan(&job.ID, &job.EmployerID, &job.Title, &job.Description, &job.Location, &job.Skills, &createdAt) {
+		job.CreatedAt = createdAt.UnixMilli()
+		jobs = append(jobs, job)
+	}
+
+	return jobs, iter.Close()
+}
+
+func (db *CassandraDB) GetAllJobs() ([]models.Job, error) {
+	iter := db.session.Query(`
+		SELECT id, employer_id, title, description, location, skills, created_at
+		FROM jobs LIMIT 100`,
+	).Iter()
+
+	var jobs []models.Job
+	var job models.Job
+	var createdAt time.Time
+
+	for iter.Scan(&job.ID, &job.EmployerID, &job.Title, &job.Description, &job.Location, &job.Skills, &createdAt) {
+		job.CreatedAt = createdAt.UnixMilli()
+		jobs = append(jobs, job)
+	}
+
+	return jobs, iter.Close()
+}
+
+func (db *CassandraDB) UpdateJob(job *models.Job) error {
+	t := time.UnixMilli(job.CreatedAt)
+	batch := db.session.NewBatch(gocql.LoggedBatch)
+	batch.Query(`
+		UPDATE jobs
+		SET title = ?, description = ?, location = ?, skills = ?
+		WHERE id = ?`,
+		job.Title, job.Description, job.Location, job.Skills, job.ID,
+	)
+	batch.Query(`
+		UPDATE jobs_by_employer
+		SET title = ?, description = ?, location = ?, skills = ?
+		WHERE employer_id = ? AND created_at = ? AND id = ?`,
+		job.Title, job.Description, job.Location, job.Skills,
+		job.EmployerID, t, job.ID,
+	)
+	return db.session.ExecuteBatch(batch)
+}
+
+func (db *CassandraDB) DeleteJob(job *models.Job) error {
+	t := time.UnixMilli(job.CreatedAt)
+	batch := db.session.NewBatch(gocql.LoggedBatch)
+	batch.Query(`DELETE FROM jobs WHERE id = ?`, job.ID)
+	batch.Query(`DELETE FROM jobs_by_employer WHERE employer_id = ? AND created_at = ? AND id = ?`, job.EmployerID, t, job.ID)
+	return db.session.ExecuteBatch(batch)
 }

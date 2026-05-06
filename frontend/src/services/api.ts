@@ -1,6 +1,6 @@
 import axios, { AxiosInstance, AxiosResponse, InternalAxiosRequestConfig } from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { AuthResponse, Profile, Candidate, UploadUrlResponse, MatchDetail, Message, DiscoverUser, User } from '../types';
+import { AuthResponse, Profile, Candidate, UploadUrlResponse, MatchDetail, Message, DiscoverUser, DiscoverJob, User, Job } from '../types';
 
 const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:8000';
 const AUTH_USER_KEY = 'authUser';
@@ -125,14 +125,43 @@ class APIService {
     await this.client.put('/device-token', { token });
   }
 
-  async getDiscover(): Promise<DiscoverUser[]> {
-    const { data } = await this.client.get<{ users: DiscoverUser[] }>('/discover');
-    return data.users ?? [];
+  async getDiscover(): Promise<DiscoverUser[] | DiscoverJob[]> {
+    const { data } = await this.client.get<{ users?: DiscoverUser[]; jobs?: DiscoverJob[] }>('/discover');
+    if (data.users) {
+      return data.users ?? [];
+    } else if (data.jobs) {
+      return data.jobs ?? [];
+    }
+    return [];
   }
 
   async getCandidates(): Promise<Candidate[]> {
     const { data } = await this.client.get<{ candidates: Candidate[] }>('/candidates');
     return data.candidates ?? [];
+  }
+
+  async createJob(job: { title: string; description: string; location: string; skills?: string[] }): Promise<Job> {
+    const { data } = await this.client.post<Job>('/jobs', job);
+    return data;
+  }
+
+  async getJobs(): Promise<Job[]> {
+    const { data } = await this.client.get<{ jobs: Job[] }>('/jobs');
+    return data.jobs ?? [];
+  }
+
+  async getJob(jobId: string): Promise<Job> {
+    const { data } = await this.client.get<Job>(`/jobs/${jobId}`);
+    return data;
+  }
+
+  async updateJob(jobId: string, job: { title?: string; description?: string; location?: string; skills?: string[] }): Promise<Job> {
+    const { data } = await this.client.put<Job>(`/jobs/${jobId}`, job);
+    return data;
+  }
+
+  async deleteJob(jobId: string): Promise<void> {
+    await this.client.delete(`/jobs/${jobId}`);
   }
 
   async getMatches(): Promise<MatchDetail[]> {
@@ -143,6 +172,11 @@ class APIService {
   async getMessages(matchId: string): Promise<Message[]> {
     const { data } = await this.client.get<{ messages: Message[] }>(`/matches/${matchId}/messages`);
     return data.messages ?? [];
+  }
+
+  async getMatchProfile(matchId: string): Promise<Candidate> {
+    const { data } = await this.client.get<Candidate>(`/matches/${matchId}/profile`);
+    return data;
   }
 
   async deleteMatch(matchId: string): Promise<void> {

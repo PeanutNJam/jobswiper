@@ -11,12 +11,15 @@ import {
   SafeAreaView,
   ActivityIndicator,
   Alert,
+  Modal,
+  Image,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { HugeiconsIcon } from '@hugeicons/react-native';
 import Delete02Icon from '@hugeicons/core-free-icons/dist/esm/Delete02Icon';
+import UserIcon from '@hugeicons/core-free-icons/dist/esm/UserIcon';
 import { Colors } from '../constants/colors';
-import { Message } from '../types';
+import { Candidate, Message } from '../types';
 import api from '../services/api';
 import { useAuthStore } from '../store';
 
@@ -43,6 +46,9 @@ export default function ConversationScreen({ matchId, otherUserName, onBack, onD
   const [loading,   setLoading]   = useState(true);
   const [sending,   setSending]   = useState(false);
   const [connected, setConnected] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [profileLoading, setProfileLoading] = useState(false);
+  const [matchProfile, setMatchProfile] = useState<Candidate | null>(null);
 
   const listRef = useRef<FlatList>(null);
   const wsRef   = useRef<WebSocket | null>(null);
@@ -140,6 +146,23 @@ export default function ConversationScreen({ matchId, otherUserName, onBack, onD
     );
   };
 
+  const openProfile = async () => {
+    setProfileOpen(true);
+    if (matchProfile || profileLoading) return;
+    setProfileLoading(true);
+    try {
+      const nextProfile = await api.getMatchProfile(matchId);
+      setMatchProfile(nextProfile);
+    } catch {
+      Alert.alert('Profile unavailable', 'Could not load this profile right now.');
+      setProfileOpen(false);
+    } finally {
+      setProfileLoading(false);
+    }
+  };
+
+  const profileName = matchProfile?.name || otherUserName;
+
   // ── Render ────────────────────────────────────────────────────────────────
   return (
     <SafeAreaView style={styles.safe}>
@@ -152,9 +175,14 @@ export default function ConversationScreen({ matchId, otherUserName, onBack, onD
           <Text style={styles.headerName} numberOfLines={1}>{otherUserName}</Text>
           {connected && <Text style={styles.onlineLabel}>● online</Text>}
         </View>
-        <TouchableOpacity style={styles.deleteBtn} onPress={confirmDelete} hitSlop={10}>
-          <HugeiconsIcon icon={Delete02Icon} size={21} color={Colors.red} strokeWidth={1.9} />
-        </TouchableOpacity>
+        <View style={styles.headerActions}>
+          <TouchableOpacity style={styles.headerIconBtn} onPress={openProfile} hitSlop={10}>
+            <HugeiconsIcon icon={UserIcon} size={21} color={Colors.primary} strokeWidth={1.9} />
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.headerIconBtn} onPress={confirmDelete} hitSlop={10}>
+            <HugeiconsIcon icon={Delete02Icon} size={21} color={Colors.red} strokeWidth={1.9} />
+          </TouchableOpacity>
+        </View>
       </View>
 
       <KeyboardAvoidingView
@@ -221,6 +249,55 @@ export default function ConversationScreen({ matchId, otherUserName, onBack, onD
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
+
+      <Modal
+        visible={profileOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setProfileOpen(false)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.profileModal}>
+            <TouchableOpacity style={styles.modalClose} onPress={() => setProfileOpen(false)}>
+              <Text style={styles.modalCloseText}>×</Text>
+            </TouchableOpacity>
+
+            {profileLoading ? (
+              <View style={styles.profileLoading}>
+                <ActivityIndicator color={Colors.primary} />
+              </View>
+            ) : (
+              <>
+                {matchProfile?.photoUrl ? (
+                  <Image source={{ uri: matchProfile.photoUrl }} style={styles.profileAvatarImage} />
+                ) : (
+                  <View style={styles.profileAvatar}>
+                    <Text style={styles.profileAvatarText}>{profileName[0]?.toUpperCase() ?? '?'}</Text>
+                  </View>
+                )}
+                <Text style={styles.profileName}>{profileName}</Text>
+                {matchProfile?.location ? (
+                  <Text style={styles.profileLocation}>📍 {matchProfile.location}</Text>
+                ) : null}
+                {matchProfile?.description ? (
+                  <Text style={styles.profileDescription}>{matchProfile.description}</Text>
+                ) : (
+                  <Text style={styles.profileDescriptionEmpty}>No profile description yet.</Text>
+                )}
+                {(matchProfile?.skills?.length ?? 0) > 0 && (
+                  <View style={styles.profileSkills}>
+                    {matchProfile!.skills!.map(skill => (
+                      <View key={skill} style={styles.profileSkillChip}>
+                        <Text style={styles.profileSkillText}>{skill}</Text>
+                      </View>
+                    ))}
+                  </View>
+                )}
+              </>
+            )}
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -244,7 +321,8 @@ const styles = StyleSheet.create({
   headerCenter: { flex: 1, alignItems: 'center' },
   headerName:   { fontSize: 17, fontWeight: '700', color: Colors.text1 },
   onlineLabel:  { fontSize: 11, color: Colors.green, marginTop: 1 },
-  deleteBtn:    { width: 44, alignItems: 'center' },
+  headerActions: { width: 88, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end' },
+  headerIconBtn: { width: 40, alignItems: 'center' },
 
   listContent: { paddingHorizontal: 16, paddingVertical: 16, flexGrow: 1 },
   emptyChat:    { flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 80 },
@@ -300,4 +378,48 @@ const styles = StyleSheet.create({
   sendBtn:    { width: 44, height: 44, borderRadius: 22, backgroundColor: Colors.primary, alignItems: 'center', justifyContent: 'center' },
   sendBtnOff: { backgroundColor: Colors.border },
   sendIcon:   { fontSize: 26, color: '#fff', lineHeight: 30 },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.28)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+  },
+  profileModal: {
+    width: '100%',
+    maxWidth: 360,
+    backgroundColor: Colors.card,
+    borderRadius: 22,
+    padding: 22,
+    alignItems: 'center',
+  },
+  modalClose: {
+    position: 'absolute',
+    top: 10,
+    right: 12,
+    width: 34,
+    height: 34,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalCloseText: { color: Colors.text2, fontSize: 28, lineHeight: 30, fontWeight: '700' },
+  profileLoading: { minHeight: 220, alignItems: 'center', justifyContent: 'center' },
+  profileAvatarImage: { width: 82, height: 82, borderRadius: 41, marginBottom: 14 },
+  profileAvatar: {
+    width: 82,
+    height: 82,
+    borderRadius: 41,
+    backgroundColor: Colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 14,
+  },
+  profileAvatarText: { color: '#fff', fontSize: 32, fontWeight: '800' },
+  profileName: { color: Colors.text1, fontSize: 22, fontWeight: '800', textAlign: 'center' },
+  profileLocation: { color: Colors.text2, fontSize: 14, marginTop: 6, textAlign: 'center' },
+  profileDescription: { color: Colors.text2, fontSize: 15, lineHeight: 22, textAlign: 'center', marginTop: 14 },
+  profileDescriptionEmpty: { color: Colors.text3, fontSize: 15, lineHeight: 22, textAlign: 'center', marginTop: 14 },
+  profileSkills: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 8, marginTop: 16 },
+  profileSkillChip: { backgroundColor: Colors.tagBg, borderRadius: 16, paddingHorizontal: 11, paddingVertical: 6 },
+  profileSkillText: { color: Colors.primary, fontSize: 12, fontWeight: '700' },
 });

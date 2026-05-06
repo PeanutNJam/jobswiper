@@ -53,6 +53,24 @@ func HealthCheck(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok", "service": "JobSwiper API"})
 }
 
+func normalizeStrings(values []string) []string {
+	normalized := make([]string, 0, len(values))
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		key := strings.ToLower(value)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		normalized = append(normalized, value)
+	}
+	return normalized
+}
+
 // ── Auth ───────────────────────────────────────────────────────────────────
 
 type registerRequest struct {
@@ -211,20 +229,20 @@ func (h *Handler) UpdateProfile(c *gin.Context) {
 	}
 
 	if req.Name != nil {
-		profile.Name = *req.Name
+		profile.Name = strings.TrimSpace(*req.Name)
 	}
 	if req.Description != nil {
-		profile.Description = *req.Description
+		profile.Description = strings.TrimSpace(*req.Description)
 	}
 	if req.PhotoURL != nil {
-		profile.PhotoURL = *req.PhotoURL
-		log.Printf("[UPDATE] userID=%s photoURL=%s", userID, *req.PhotoURL)
+		profile.PhotoURL = strings.TrimSpace(*req.PhotoURL)
+		log.Printf("[UPDATE] userID=%s photoURL=%s", userID, profile.PhotoURL)
 	}
 	if req.Location != nil {
-		profile.Location = *req.Location
+		profile.Location = strings.TrimSpace(*req.Location)
 	}
 	if req.Skills != nil {
-		profile.Skills = *req.Skills
+		profile.Skills = normalizeStrings(*req.Skills)
 	}
 
 	if err := h.db.UpdateProfile(profile); err != nil {
@@ -319,32 +337,62 @@ func (h *Handler) SaveDeviceToken(c *gin.Context) {
 // If Redis is unavailable the call falls back to a direct Cassandra read, which
 // has the original race window but keeps the endpoint functional.
 func (h *Handler) detectAndCreateMatch(ctx context.Context, userID, targetID string) bool {
-	won, err := h.matchQ.RecordRightSwipe(ctx, userID, targetID)
-	if err != nil {
-		log.Printf("matchqueue unavailable, falling back to DB check: %v", err)
-		// Degraded path — still subject to the race condition described in the
-		// matchqueue package docs, but won't take the endpoint down.
-		mutual, dbErr := h.db.GetSwipe(targetID, userID)
-		won = dbErr == nil && mutual.Direction == "right"
-	}
+	// Check if targetID is a job or a user
+	if job, err := h.db.GetJobByID(targetID); err == nil {
+		// This is a job swipe - match with the employer
+		won, err := h.matchQ.RecordRightSwipe(ctx, userID, job.EmployerID)
+		if err != nil {
+			log.Printf("matchqueue unavailable, falling back to DB check: %v", err)
+			// Degraded path — still subject to the race condition
+			mutual, dbErr := h.db.GetSwipe(job.EmployerID, userID)
+			won = dbErr == nil && mutual.Direction == "right"
+		}
 
-	if !won {
-		return false
-	}
+		if !won {
+			return false
+		}
 
-	match := &models.Match{
-		ID:        uuid.New().String(),
-		UserID1:   userID,
-		UserID2:   targetID,
-		CreatedAt: time.Now().UnixMilli(),
-	}
-	if err := h.db.CreateMatch(match); err != nil {
-		log.Printf("failed to create match (%s, %s): %v", userID, targetID, err)
-		return false
-	}
+		match := &models.Match{
+			ID:        uuid.New().String(),
+			UserID1:   userID,
+			UserID2:   job.EmployerID,
+			CreatedAt: time.Now().UnixMilli(),
+		}
+		if err := h.db.CreateMatch(match); err != nil {
+			log.Printf("failed to create match (%s, %s): %v", userID, job.EmployerID, err)
+			return false
+		}
 
-	go h.notifyMatch(userID, targetID)
-	return true
+		go h.notifyMatch(userID, job.EmployerID)
+		return true
+	} else {
+		// This is a user-to-user swipe (employer swiping job seekers)
+		won, err := h.matchQ.RecordRightSwipe(ctx, userID, targetID)
+		if err != nil {
+			log.Printf("matchqueue unavailable, falling back to DB check: %v", err)
+			// Degraded path — still subject to the race condition
+			mutual, dbErr := h.db.GetSwipe(targetID, userID)
+			won = dbErr == nil && mutual.Direction == "right"
+		}
+
+		if !won {
+			return false
+		}
+
+		match := &models.Match{
+			ID:        uuid.New().String(),
+			UserID1:   userID,
+			UserID2:   targetID,
+			CreatedAt: time.Now().UnixMilli(),
+		}
+		if err := h.db.CreateMatch(match); err != nil {
+			log.Printf("failed to create match (%s, %s): %v", userID, targetID, err)
+			return false
+		}
+
+		go h.notifyMatch(userID, targetID)
+		return true
+	}
 }
 
 // ── Upload URL ─────────────────────────────────────────────────────────────
@@ -387,33 +435,48 @@ func (h *Handler) GetUploadURL(c *gin.Context) {
 func (h *Handler) GetCandidates(c *gin.Context) {
 	employerID := c.GetString("userID")
 
-	candidateIDs, err := h.db.GetRightSwipesByTarget(employerID)
+	jobs, err := h.db.GetJobsByEmployerID(employerID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get candidates"})
 		return
 	}
 
 	type candidateResult struct {
-		UserID      string `json:"user_id"`
-		Name        string `json:"name"`
-		Description string `json:"description"`
-		PhotoURL    string `json:"photo_url,omitempty"`
-		Location    string `json:"location"`
+		UserID      string   `json:"user_id"`
+		Name        string   `json:"name"`
+		Description string   `json:"description"`
+		PhotoURL    string   `json:"photo_url,omitempty"`
+		Location    string   `json:"location"`
+		Skills      []string `json:"skills"`
 	}
 
 	var results []candidateResult
-	for _, uid := range candidateIDs {
-		p, err := h.db.GetProfileByUserID(uid)
+	seen := map[string]struct{}{}
+	for _, job := range jobs {
+		candidateIDs, err := h.db.GetRightSwipesByTarget(job.ID)
 		if err != nil {
-			continue
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get candidates"})
+			return
 		}
-		results = append(results, candidateResult{
-			UserID:      uid,
-			Name:        p.Name,
-			Description: p.Description,
-			PhotoURL:    p.PhotoURL,
-			Location:    p.Location,
-		})
+		for _, uid := range candidateIDs {
+			if _, ok := seen[uid]; ok {
+				continue
+			}
+			seen[uid] = struct{}{}
+
+			p, err := h.db.GetProfileByUserID(uid)
+			if err != nil {
+				continue
+			}
+			results = append(results, candidateResult{
+				UserID:      uid,
+				Name:        p.Name,
+				Description: p.Description,
+				PhotoURL:    p.PhotoURL,
+				Location:    p.Location,
+				Skills:      p.Skills,
+			})
+		}
 	}
 	if results == nil {
 		results = []candidateResult{}
@@ -499,6 +562,47 @@ func (h *Handler) DeleteMatch(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
+func (h *Handler) GetMatchProfile(c *gin.Context) {
+	userID := c.GetString("userID")
+	matchID := c.Param("matchId")
+
+	match, err := h.db.GetMatchByID(matchID)
+	if err != nil || (match.UserID1 != userID && match.UserID2 != userID) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "not authorized"})
+		return
+	}
+
+	otherID := match.UserID1
+	if otherID == userID {
+		otherID = match.UserID2
+	}
+
+	type matchProfileResult struct {
+		UserID      string   `json:"user_id"`
+		Name        string   `json:"name"`
+		Description string   `json:"description"`
+		PhotoURL    string   `json:"photo_url,omitempty"`
+		Location    string   `json:"location"`
+		Skills      []string `json:"skills"`
+	}
+
+	result := matchProfileResult{UserID: otherID}
+	if profile, err := h.db.GetProfileByUserID(otherID); err == nil {
+		result.Name = profile.Name
+		result.Description = profile.Description
+		result.PhotoURL = profile.PhotoURL
+		result.Location = profile.Location
+		result.Skills = profile.Skills
+	}
+	if result.Name == "" {
+		if user, err := h.db.GetUserByID(otherID); err == nil {
+			result.Name = user.Username
+		}
+	}
+
+	c.JSON(http.StatusOK, result)
+}
+
 // ── Messages ───────────────────────────────────────────────────────────────
 
 func (h *Handler) GetMessages(c *gin.Context) {
@@ -539,6 +643,11 @@ func (h *Handler) SendMessage(c *gin.Context) {
 	var req sendMessageRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	req.Content = strings.TrimSpace(req.Content)
+	if req.Content == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "content is required"})
 		return
 	}
 
@@ -643,55 +752,106 @@ func (h *Handler) GetDiscover(c *gin.Context) {
 		return
 	}
 
-	targetType := "employer"
-	if me.UserType == "employer" {
-		targetType = "job_seeker"
-	}
-
-	candidates, err := h.db.GetUsersByType(targetType)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get users"})
-		return
-	}
-
-	swipedIDs, _ := h.db.GetSwipedTargetIDs(userID)
-	swiped := make(map[string]bool, len(swipedIDs))
-	for _, id := range swipedIDs {
-		swiped[id] = true
-	}
-
-	type discoverUser struct {
-		UserID      string   `json:"user_id"`
-		Username    string   `json:"username"`
-		Name        string   `json:"name"`
-		Description string   `json:"description"`
-		PhotoURL    string   `json:"photo_url,omitempty"`
-		Location    string   `json:"location"`
-		Skills      []string `json:"skills"`
-	}
-
-	var results []discoverUser
-	for _, u := range candidates {
-		if swiped[u.ID] || u.ID == userID {
-			continue
+	if me.UserType == "job_seeker" {
+		// Job seekers discover jobs
+		jobs, err := h.db.GetAllJobs()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get jobs"})
+			return
 		}
-		du := discoverUser{UserID: u.ID, Username: u.Username}
-		if p, err := h.db.GetProfileByUserID(u.ID); err == nil {
-			du.Name = p.Name
-			du.Description = p.Description
-			du.PhotoURL = p.PhotoURL
-			du.Location = p.Location
-			du.Skills = p.Skills
+
+		swipedIDs, _ := h.db.GetSwipedTargetIDs(userID)
+		swiped := make(map[string]bool, len(swipedIDs))
+		for _, id := range swipedIDs {
+			swiped[id] = true
 		}
-		if du.Name == "" {
-			du.Name = u.Username
+
+		type discoverJob struct {
+			JobID        string   `json:"job_id"`
+			Title        string   `json:"title"`
+			Description  string   `json:"description"`
+			Location     string   `json:"location"`
+			Skills       []string `json:"skills"`
+			EmployerName string   `json:"employer_name"`
 		}
-		results = append(results, du)
+
+		var results []discoverJob
+		for _, job := range jobs {
+			if swiped[job.ID] {
+				continue
+			}
+
+			dj := discoverJob{
+				JobID:       job.ID,
+				Title:       job.Title,
+				Description: job.Description,
+				Location:    job.Location,
+				Skills:      job.Skills,
+			}
+
+			// Get employer name
+			if employer, err := h.db.GetUserByID(job.EmployerID); err == nil {
+				if profile, err := h.db.GetProfileByUserID(job.EmployerID); err == nil && profile.Name != "" {
+					dj.EmployerName = profile.Name
+				} else {
+					dj.EmployerName = employer.Username
+				}
+			}
+
+			results = append(results, dj)
+		}
+
+		if results == nil {
+			results = []discoverJob{}
+		}
+		c.JSON(http.StatusOK, gin.H{"jobs": results})
+	} else {
+		// Employers discover job seekers (unchanged)
+		candidates, err := h.db.GetUsersByType("job_seeker")
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get users"})
+			return
+		}
+
+		swipedIDs, _ := h.db.GetSwipedTargetIDs(userID)
+		swiped := make(map[string]bool, len(swipedIDs))
+		for _, id := range swipedIDs {
+			swiped[id] = true
+		}
+
+		type discoverUser struct {
+			UserID      string   `json:"user_id"`
+			Username    string   `json:"username"`
+			Name        string   `json:"name"`
+			Description string   `json:"description"`
+			PhotoURL    string   `json:"photo_url,omitempty"`
+			Location    string   `json:"location"`
+			Skills      []string `json:"skills"`
+		}
+
+		var results []discoverUser
+		for _, u := range candidates {
+			if swiped[u.ID] || u.ID == userID {
+				continue
+			}
+			du := discoverUser{UserID: u.ID, Username: u.Username}
+			if p, err := h.db.GetProfileByUserID(u.ID); err == nil {
+				du.Name = p.Name
+				du.Description = p.Description
+				du.PhotoURL = p.PhotoURL
+				du.Location = p.Location
+				du.Skills = p.Skills
+			}
+			if du.Name == "" {
+				du.Name = u.Username
+			}
+			results = append(results, du)
+		}
+		if results == nil {
+			results = []discoverUser{}
+		}
+		c.JSON(http.StatusOK, gin.H{"users": results})
 	}
-	if results == nil {
-		results = []discoverUser{}
-	}
-	c.JSON(http.StatusOK, gin.H{"users": results})
 }
 
 // notifyMatch runs in a goroutine — push failures never block the swipe response.
@@ -729,4 +889,279 @@ func (h *Handler) notifyMatch(userID1, userID2 string) {
 	if err := h.push.Send(msgs); err != nil {
 		log.Printf("push notification failed for match (%s, %s): %v", userID1, userID2, err)
 	}
+}
+
+// ── Jobs ───────────────────────────────────────────────────────────────────
+
+type createJobRequest struct {
+	Title       string   `json:"title"       binding:"required"`
+	Description string   `json:"description" binding:"required"`
+	Location    string   `json:"location"`
+	Skills      []string `json:"skills"`
+}
+
+func (h *Handler) CreateJob(c *gin.Context) {
+	userID := c.GetString("userID")
+
+	me, err := h.db.GetUserByID(userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get user"})
+		return
+	}
+
+	if me.UserType != "employer" {
+		c.JSON(http.StatusForbidden, gin.H{"error": "only employers can create jobs"})
+		return
+	}
+
+	var req createJobRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	job := &models.Job{
+		ID:          uuid.New().String(),
+		EmployerID:  userID,
+		Title:       strings.TrimSpace(req.Title),
+		Description: strings.TrimSpace(req.Description),
+		Location:    strings.TrimSpace(req.Location),
+		Skills:      normalizeStrings(req.Skills),
+		CreatedAt:   time.Now().UnixMilli(),
+	}
+	if job.Title == "" || job.Description == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "title and description are required"})
+		return
+	}
+
+	if err := h.db.CreateJob(job); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create job"})
+		return
+	}
+
+	c.JSON(http.StatusCreated, job)
+}
+
+func (h *Handler) GetJobs(c *gin.Context) {
+	userID := c.GetString("userID")
+
+	me, err := h.db.GetUserByID(userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get user"})
+		return
+	}
+
+	var jobs []models.Job
+	if me.UserType == "employer" {
+		jobs, err = h.db.GetJobsByEmployerID(userID)
+	} else {
+		jobs, err = h.db.GetAllJobs()
+	}
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get jobs"})
+		return
+	}
+
+	if me.UserType == "employer" {
+		results, err := h.buildEmployerJobResults(userID, jobs)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get job stats"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"jobs": results})
+		return
+	}
+
+	if jobs == nil {
+		jobs = []models.Job{}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"jobs": jobs})
+}
+
+type jobCandidateResult struct {
+	UserID      string   `json:"user_id"`
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	PhotoURL    string   `json:"photo_url,omitempty"`
+	Location    string   `json:"location"`
+	Skills      []string `json:"skills"`
+}
+
+type employerJobResult struct {
+	models.Job
+	SwipeCount      int                  `json:"swipe_count"`
+	RightSwipeCount int                  `json:"right_swipe_count"`
+	MatchedCount    int                  `json:"matched_count"`
+	MatchedUsers    []jobCandidateResult `json:"matched_users"`
+}
+
+func (h *Handler) buildEmployerJobResults(employerID string, jobs []models.Job) ([]employerJobResult, error) {
+	matches, err := h.db.GetMatchesByUserID(employerID)
+	if err != nil {
+		return nil, err
+	}
+
+	matchedUserIDs := make(map[string]struct{}, len(matches))
+	for _, match := range matches {
+		otherID := match.UserID1
+		if otherID == employerID {
+			otherID = match.UserID2
+		}
+		matchedUserIDs[otherID] = struct{}{}
+	}
+
+	results := make([]employerJobResult, 0, len(jobs))
+	for _, job := range jobs {
+		swipes, err := h.db.GetSwipesByTargetID(job.ID)
+		if err != nil {
+			return nil, err
+		}
+
+		result := employerJobResult{
+			Job:          job,
+			MatchedUsers: []jobCandidateResult{},
+		}
+		seenMatchedUsers := map[string]struct{}{}
+
+		for _, swipe := range swipes {
+			result.SwipeCount++
+			if swipe.Direction != "right" {
+				continue
+			}
+			result.RightSwipeCount++
+			if _, matched := matchedUserIDs[swipe.UserID]; !matched {
+				continue
+			}
+			if _, seen := seenMatchedUsers[swipe.UserID]; seen {
+				continue
+			}
+			seenMatchedUsers[swipe.UserID] = struct{}{}
+
+			candidate := jobCandidateResult{UserID: swipe.UserID}
+			if profile, err := h.db.GetProfileByUserID(swipe.UserID); err == nil {
+				candidate.Name = profile.Name
+				candidate.Description = profile.Description
+				candidate.PhotoURL = profile.PhotoURL
+				candidate.Location = profile.Location
+				candidate.Skills = profile.Skills
+			}
+			if candidate.Name == "" {
+				if user, err := h.db.GetUserByID(swipe.UserID); err == nil {
+					candidate.Name = user.Username
+				}
+			}
+			result.MatchedUsers = append(result.MatchedUsers, candidate)
+		}
+		result.MatchedCount = len(result.MatchedUsers)
+		results = append(results, result)
+	}
+
+	return results, nil
+}
+
+func (h *Handler) GetJob(c *gin.Context) {
+	userID := c.GetString("userID")
+	jobID := c.Param("jobId")
+
+	job, err := h.db.GetJobByID(jobID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "job not found"})
+		return
+	}
+
+	// Allow access if user is the employer or a job seeker (for discovery)
+	me, err := h.db.GetUserByID(userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get user"})
+		return
+	}
+
+	if me.UserType != "employer" && job.EmployerID != userID {
+		// For job seekers, they can view any job
+		// For employers, they can only view their own jobs
+		if me.UserType == "employer" {
+			c.JSON(http.StatusForbidden, gin.H{"error": "not authorized"})
+			return
+		}
+	}
+
+	c.JSON(http.StatusOK, job)
+}
+
+type updateJobRequest struct {
+	Title       *string   `json:"title"`
+	Description *string   `json:"description"`
+	Location    *string   `json:"location"`
+	Skills      *[]string `json:"skills"`
+}
+
+func (h *Handler) UpdateJob(c *gin.Context) {
+	userID := c.GetString("userID")
+	jobID := c.Param("jobId")
+
+	job, err := h.db.GetJobByID(jobID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "job not found"})
+		return
+	}
+
+	if job.EmployerID != userID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "not authorized"})
+		return
+	}
+
+	var req updateJobRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	if req.Title != nil {
+		job.Title = strings.TrimSpace(*req.Title)
+	}
+	if req.Description != nil {
+		job.Description = strings.TrimSpace(*req.Description)
+	}
+	if req.Location != nil {
+		job.Location = strings.TrimSpace(*req.Location)
+	}
+	if req.Skills != nil {
+		job.Skills = normalizeStrings(*req.Skills)
+	}
+	if job.Title == "" || job.Description == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "title and description are required"})
+		return
+	}
+
+	if err := h.db.UpdateJob(job); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update job"})
+		return
+	}
+
+	c.JSON(http.StatusOK, job)
+}
+
+func (h *Handler) DeleteJob(c *gin.Context) {
+	userID := c.GetString("userID")
+	jobID := c.Param("jobId")
+
+	job, err := h.db.GetJobByID(jobID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "job not found"})
+		return
+	}
+
+	if job.EmployerID != userID {
+		c.JSON(http.StatusForbidden, gin.H{"error": "not authorized"})
+		return
+	}
+
+	if err := h.db.DeleteJob(job); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete job"})
+		return
+	}
+
+	c.Status(http.StatusNoContent)
 }

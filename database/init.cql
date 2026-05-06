@@ -40,6 +40,8 @@ CREATE TABLE IF NOT EXISTS jobswiper.profiles (
     description TEXT,
     photo_url   TEXT,
     location    TEXT,
+    device_token TEXT,
+    skills      LIST<TEXT>,
     updated_at  TIMESTAMP
 );
 
@@ -48,10 +50,21 @@ CREATE TABLE IF NOT EXISTS jobswiper.jobs (
     employer_id UUID,
     title       TEXT,
     description TEXT,
-    salary      TEXT,
     location    TEXT,
+    skills      LIST<TEXT>,
     created_at  TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS jobswiper.jobs_by_employer (
+    employer_id UUID,
+    created_at  TIMESTAMP,
+    id          UUID,
+    title       TEXT,
+    description TEXT,
+    location    TEXT,
+    skills      LIST<TEXT>,
+    PRIMARY KEY ((employer_id), created_at, id)
+) WITH CLUSTERING ORDER BY (created_at DESC, id ASC);
 
 -- Partition by user_id, cluster by target_id for O(1) mutual-match lookups.
 CREATE TABLE IF NOT EXISTS jobswiper.swipes (
